@@ -2,7 +2,8 @@ import bpy
 from bpy.types import Operator, AddonPreferences
 from bpy.props import StringProperty, IntProperty, BoolProperty
 
-import sys, inspect
+import sys, inspect, logging
+
 
 bl_info = {
  "name": "Shabby's SVN Connector",
@@ -85,25 +86,32 @@ class TESTADDON_PT_TestPanel(bpy.types.Panel):
 
 
 def register():    
-    print(f'Registering classes defined in module {__name__} ')
+    myLogger.info(f'Registering classes defined in module {__name__}')
     for name, cls in inspect.getmembers(sys.modules[__name__], lambda x: inspect.isclass(x) and (x.__module__ == __name__)):
-        print(f'Registering class {cls} with name {name}')
-        #bpy.utils.register_class(cls)
+        myLogger.debug(f'Registering class {cls} with name {name}')
+        bpy.utils.register_class(cls)
 
 
 def unregister():
+    myLogger.info(f'Unregistering classes defined in module {__name__}')
     for name, cls in inspect.getmembers(sys.modules[__name__], lambda x: inspect.isclass(x) and (x.__module__ == __name__)):
-        print(f'Unregistering class {cls} with name {name}')
-        #bpy.utils.unregister_class(cls)
+        myLogger.debug(f'Unregistering class {cls} with name {name}')
+        bpy.utils.unregister_class(cls)
 
 
 
-################
-###  TESTING  ##
-################
+##########################
+###  TESTING, LOGGING  ###
+##########################
 
 # Normally used for script execution
 #  Replace with testing.
 if __name__ == "__main__":
-   register()
-   unregister()
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+    myLogger = logging.getLogger('com.codetestdummy.blender.svnconnector')
+
+    register()
+    unregister()
+
+else:
+    logging.getLogger(__name__)

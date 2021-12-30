@@ -1,22 +1,37 @@
+## Add-on for Blender to provide simple control of an SVN repo within the GUI
+#
+#    Target: 
+#     Blender 2.8+, 3.0
+#
+#    Requirements:
+#     subversion 1.14
+#     (optional) svnadmin 1.14
+#
+#    Repo:
+#     https://
+#
+#    Notes:
+#     - This add-on is currently implemented using command line pipes via Python.
+#     - Implementation is also limited to file access initially.
+#     - The use of subversions SWIG hooks should be investigated since it should lead
+#       to better compatibility accross svn versions.
+#     - This add-on is not yet localized.
+#     - Diff will be implemented in text first. If practical, a binary diff would be 
+#       useful, 
+#
+#    Acknowledgements:
+#     - Subversion is owned and maintained by the Apache Foundation.
+#     - Blender is maintained by the Blender Foundation.
+#     - This add-on developed partly with 'Blender Development' extension for VS Code 
+#       by Jacques Lucke
+#  
+
 import bpy
 from bpy.types import Operator, AddonPreferences
 from bpy.props import StringProperty, IntProperty, BoolProperty
 
 import sys, inspect, logging
-
-
-bl_info = {
- "name": "Shabby's SVN Connector",
- "description": "Provides basic interface with a Subversion repository.",
- "author": "Tester",
- "blender": (2, 80, 0),
- "version": (0, 0, 1),
- "category": "Test",
- "location": "File -> SVN Connector",
- "warning": "",
- "doc_url": "",
- "tracker_url": ""
-}
+import os, subprocess, re, gettext
 
 
 class ExampleAddonPreferences(AddonPreferences):
@@ -85,6 +100,23 @@ class TESTADDON_PT_TestPanel(bpy.types.Panel):
         row.label(text="All the better for working on Mac!")
 
 
+#########################
+### BLENDER INTERFACE ###
+#########################
+
+bl_info = {
+ "name": "Shabby's SVN Connector",
+ "description": "Provides basic interface with a Subversion repository.",
+ "author": "Tester",
+ "blender": (2, 80, 0),
+ "version": (0, 0, 1),
+ "category": "Test",
+ "location": "File -> SVN Connector",
+ "warning": "",
+ "doc_url": "",
+ "tracker_url": ""
+}
+
 def register():    
     myLogger.info(f'Registering classes defined in module {__name__}')
     for name, cls in inspect.getmembers(sys.modules[__name__], lambda x: inspect.isclass(x) and (x.__module__ == __name__)):
@@ -114,4 +146,4 @@ if __name__ == "__main__":
     unregister()
 
 else:
-    logging.getLogger(__name__)
+    myLogger = logging.getLogger(__name__)

@@ -1,3 +1,5 @@
 ported
 cache
 **/__pycache__
+
+.vscode/

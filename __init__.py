@@ -27,16 +27,17 @@
 #  
 
 import bpy
-from bpy.types import Operator, AddonPreferences
+from bpy.types import Attribute, Operator, AddonPreferences
 from bpy.props import StringProperty, IntProperty, BoolProperty
 
 import sys, inspect, logging
 import os, subprocess, re, gettext
 
 
+# Preferences Object
 class ExampleAddonPreferences(AddonPreferences):
-    # this must match the add-on name, use '__package__'
-    # when defining this in a submodule of a python package.
+    # This must match the add-on name. Use '__package__'
+    # if defining this in a SUBMODULE of a python package.
     bl_idname = __name__
 
     filepath: StringProperty(
@@ -54,30 +55,37 @@ class ExampleAddonPreferences(AddonPreferences):
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text="This is a preferences view for our add-on")
-        layout.prop(self, "filepath")
-        layout.prop(self, "number")
-        layout.prop(self, "boolean")
+        layout.label(text="Add-on preferences")
+
+        print(f'Drawing preference properties for class {__class__}.')
+        # NB: THis method specific for Python 3.9. 3.10 has inspect.get_annotations
+        for name in __class__.__dict__.get('__annotations__', None):
+                print(f'Adding prop {name} from class {__class__}.')
+                layout.prop(self, name)
+    
 
 
-class OBJECT_OT_addon_prefs_example(Operator):
-    """Display example preferences"""
-    bl_idname = "object.addon_prefs_example"
-    bl_label = "Add-on Preferences Example"
-    bl_options = {'REGISTER', 'UNDO'}
+# Preferences Panel
+# class OBJECT_OT_addon_prefs_example(Operator):
+#     """Display example preferences"""
+#     bl_idname = "object.addon_prefs_example"
+#     bl_label = "Add-on Preferences Example"
+#     bl_options = {'REGISTER', 'UNDO'}
 
-    def execute(self, context):
-        preferences = context.preferences
-        addon_prefs = preferences.addons[__name__].preferences
+#     def execute(self, context):
+#         preferences = context.preferences
+#         addon_prefs = preferences.addons[__name__].preferences
 
-        info = ("Path: %s, Number: %d, Boolean %r" %
-                (addon_prefs.filepath, addon_prefs.number, addon_prefs.boolean))
+#         info = ("Path: %s, Number: %d, Boolean %r" %
+#                 (addon_prefs.filepath, addon_prefs.number, addon_prefs.boolean))
 
-        self.report({'INFO'}, info)
-        print(info)
+#         self.report({'INFO'}, info)
+#         print(info)
 
-        return {'FINISHED'}
+#         return {'FINISHED'}
 
+
+# View panel display
 class TESTADDON_PT_TestPanel(bpy.types.Panel):
     bl_idname = "TESTADDON_PT_TestPanel"
     bl_label = "Test Addon"
@@ -136,14 +144,15 @@ def unregister():
 ###  TESTING, LOGGING  ###
 ##########################
 
-# Normally used for script execution
-#  Replace with testing.
+myLogger = logging.getLogger()
+
 if __name__ == "__main__":
-    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
-    myLogger = logging.getLogger('com.codetestdummy.blender.svnconnector')
+    # logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+    # myLogger = logging.getLogger('com.codetestdummy.blender.svnconnector')
 
+    # is this really required?
     register()
-    unregister()
+    #unregister()
 
-else:
-    myLogger = logging.getLogger(__name__)
+#else:
+    #myLogger = logging.getLogger(__name__)

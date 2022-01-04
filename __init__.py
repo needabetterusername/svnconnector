@@ -92,7 +92,8 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_version": ["svn","--version"],
                 "svn_info": ["svn","info"], # E155007 'not a working copy'
                 "svn_status": ["svn","status"], # W155007 'not a working copy'
-                "svn_admin_version": ["svnadmin","--version","--quiet"] }
+                "svn_admin_version": ["svnadmin","--version","--quiet"],
+                "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"] }
 
 
 
@@ -112,6 +113,7 @@ if platform.system() == "Darwin": # | "Linux" | "Windows"
 else:
     myLogger.critical('Aborting init due to unsupported operating system type.')
     raise SystemError('This add-on has not been implemented for your OS.')
+    #TODO: This is probably no the graceful way to quit.
 
 
 ## Check python version
@@ -122,8 +124,8 @@ if sys.version_info < (3, 5):
 myLogger.info("Using Python version " + '.'.join(map(str, sys.version_info)))
 
 
-# Check blender version
-# TODO! Necessary? see bl_info
+# Record Blender version
+myLogger.info(f'Got blender version {bpy.app.version}.')
 
 
 ## Check that svn is installed
@@ -158,8 +160,8 @@ try:
     myLogger.info("Subversion RA modules confirmed. ra_svn: {0} ra_local: {1}".format(svn_ra_svn, svn_ra_local))
     
 except FileNotFoundError:
-    myLogger.warning(error)
-    myLogger.warning("\'svn\' command could not be found.")
+    myLogger.critical(error)
+    myLogger.critical("\'svn\' command could not be found.")
 
 
 ## Check that svnadmin is installed
@@ -175,8 +177,8 @@ try:
     myLogger.info("\'svnadmin\' command found successfully. Using version" + svnadmin_version)
     
 except FileNotFoundError:
-    myLogger.warning(error)
-    myLogger.warning("\'svnadmin\' command could not be found.")
+    myLogger.error(error)
+    myLogger.error("\'svnadmin\' command could not be found.")
 
 
 
@@ -224,7 +226,7 @@ class CreateAndImportOperator(bpy.types.Operator):
         #On Unix:
             myLogger.info("Start creating repository via filesystem.")
             # Create a parent directory .svnrepos where you will place your SVN repositories:
-            # !! Check prefs and existence!!
+            # TODO: Check prefs and existence
             #  mkdir -p $HOME/.svnrepos/
             myLogger.info(f'Created repository home at: {prefs["str_prefSVNRepoHome"]}')
             
@@ -271,6 +273,7 @@ class CreateAndImportOperator(bpy.types.Operator):
             # Update your working copy:
             #  svn update
         
+        self.report({'INFO'}, f'Created repository at {prefs["str_prefSVNRepoHome"] + Path(filepath).parent.stem} and added {filename}.')
         return {'FINISHED'}
         
 
@@ -293,7 +296,7 @@ class AddOperator(bpy.types.Operator):
         stdout, stderr = process.communicate()
         if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
             self.report({'ERROR'}, "There is not working set for this directory. Please create a new repository or move the file to an existing working set.")
-            
+
             return {'FINISHED'}
         
         # Confirm that that the file is saved
@@ -353,8 +356,20 @@ class CommitOperator(bpy.types.Operator):
         #    '!' item is missing (removed by non-svn command) or incomplete
         #    '~' versioned item obstructed by some item of a different kind
 
-        myLogger.info(f'Committed {filepath}.')
-        self.report({'INFO'}, f'Committed {filepath}.')
+        # Confirm that file is added and has outstanding changes
+        process = subprocess.Popen(svn_commands["svn_commit_single"] + [filepath],
+                     stdout=subprocess.PIPE, 
+                     stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        if len(stdout)<1:
+            result = stdout.decode('utf-8')
+            myLogger.info(result)
+            self.report({'INFO'},result)
+        else:
+            result = stderr.decode('utf-8')
+            myLogger.error(result)
+            self.report({'ERROR'},result)
+
         return {'FINISHED'}
 
 
@@ -438,15 +453,19 @@ bl_info = {
 
 def register():    
     myLogger.info(f'Registering classes defined in module {__name__}')
+
     for name, cls in inspect.getmembers(sys.modules[__name__], lambda x: inspect.isclass(x) and (x.__module__ == __name__)):
         myLogger.debug(f'Registering class {cls} with name {name}')
         bpy.utils.register_class(cls)
+    bpy.types.TOPBAR_MT_file.append(menu_draw_svn)
 
 def unregister():
     myLogger.info(f'Unregistering classes defined in module {__name__}')
+
     for name, cls in inspect.getmembers(sys.modules[__name__], lambda x: inspect.isclass(x) and (x.__module__ == __name__)):
         myLogger.debug(f'Unregistering class {cls} with name {name}')
         bpy.utils.unregister_class(cls)
+    bpy.types.TOPBAR_MT_file.remove(menu_draw_svn)
 
 
 ##############
@@ -456,5 +475,3 @@ if __name__ == "__main__":
 
     register()
     #unregister()
-else:
-    bpy.types.TOPBAR_MT_file.append(menu_draw_svn)

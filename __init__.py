@@ -31,19 +31,19 @@
 #  
 
 import bpy
-from bpy.types import Attribute, Operator, AddonPreferences
+from bpy.types import Attribute, Operator, AddonPreferences, STATUSBAR_HT_header
 from bpy.props import StringProperty, IntProperty, BoolProperty
 
 import sys, inspect, logging
-import os, subprocess, re, gettext
+import platform, subprocess, re, gettext
 
 from pathlib import Path
 from datetime import datetime
 
 
-#######################
-###  INIT, LOGGING  ###
-#######################
+######################
+###  INIT/LOGGING  ###
+######################
 
 logFile = logging.FileHandler(filename=str(Path(__file__).parent/'svnconnector.log'),
                                 mode='w',
@@ -84,35 +84,35 @@ prefs = dict(
     str_prefSVNRepoHome = None
 )
 
-
-
 # svn command parameter dictionary correct as v1.14.1
 #  Ref: https://janakiev.com/blog/python-shell-commands/
 #  If below alternatives are not used, we might need a command factory.
 #   Alternatively SWIG: https://svnbook.red-bean.com/en/1.0/ch08s02.html#svn-ch-8-sect-2.3
 svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_version": ["svn","--version"],
-                "svn_info": ["svn","info"],
-                "svn_status": ["svn","status"],
-                "svn_admin_version": ["svn","--version","--quiet"] }
-                        
+                "svn_info": ["svn","info"], # E155007 'not a working copy'
+                "svn_status": ["svn","status"], # W155007 'not a working copy'
+                "svn_admin_version": ["svnadmin","--version","--quiet"] }
 
-#####################
-### Instantiation ###
-#####################
+
+
+########################
+###  INIT/PRE-CHECK  ###
+########################
 
 # Confirm OS type
 #  https://stackoverflow.com/questions/1854/python-what-os-am-i-running-on/58071295#58071295
-if not os.name == "posix":
-    myLogger.critical("Aborting after instantiation on OS type: " + os.name)
-    report({'ERROR'}, "This add-on has not been implemented for your OS.")
-else:
+myLogger.info(f'Got operating system: {platform.system()}')
+if platform.system() == "Darwin": # | "Linux" | "Windows"
     prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/" 
-    # return {'FINISHED'}
+# elif platform.system() == "Linux":
+#     prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/"
+# elif platform.system() == "Windows":
+#     prefs["str_prefSVNRepoHome"] = "file:///C:/SVNRepository/"
+else:
+    myLogger.critical('Aborting init due to unsupported operating system type.')
+    raise SystemError('This add-on has not been implemented for your OS.')
 
-
-# Check blender version
-# TODO! Necessary? see bl_info
 
 ## Check python version
 #    v3.5+ Required for subprocess
@@ -120,6 +120,10 @@ if sys.version_info < (3, 5):
     myLogger.critical("Python version is below the required 3.5")
     raise SystemError("Python version is below the required 3.5")
 myLogger.info("Using Python version " + '.'.join(map(str, sys.version_info)))
+
+
+# Check blender version
+# TODO! Necessary? see bl_info
 
 
 ## Check that svn is installed
@@ -155,7 +159,7 @@ try:
     
 except FileNotFoundError:
     myLogger.warning(error)
-    myLogger.warning("\'svnadmin\' command could not be found.")
+    myLogger.warning("\'svn\' command could not be found.")
 
 
 ## Check that svnadmin is installed
@@ -168,7 +172,6 @@ try:
     svnadmin_version = stdout.decode('utf-8')
     svnadmin_avail = True 
     
-    myLogger.info("\'svnadmin\' command found successfully. Using version" + svnadmin_version)
     myLogger.info("\'svnadmin\' command found successfully. Using version" + svnadmin_version)
     
 except FileNotFoundError:
@@ -194,31 +197,36 @@ except FileNotFoundError:
 #   https://subversion.apache.org/quick-start#setting-up-a-local-repo
 class CreateAndImportOperator(bpy.types.Operator):
     bl_idname = "scop.create_import"
-    bl_label  = "Create Repo & Import"
+    bl_label  = "Create Repo & Add"
 
     def execute(self, context):
+
+        filepath = bpy.data.filepath
+        filename = Path(filepath).stem
+        working_dir = Path(filepath).parent
+
         # Confirm that that the file is saved
         if not bpy.data.is_saved:
-            self.report({'ERROR'}, "File has not been saved. Please save before committing.")
+            self.report({'ERROR'}, "File has not been saved to your drive. Please save it before continuing.")
             return {'FINISHED'}
         
         # Check we are not already in a working set
         # Confirm whether there is a working set available.
-        process = subprocess.Popen(svn_commands["svn_info"],
+        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
         if (len(stderr)<1) & (len(re.findall("Working Copy Root Path:", stdout.decode('utf-8')))>0):
-            self.report({'ERROR'}, "A working copy already exists for this directory.")
+            self.report({'ERROR'}, "A working copy already exists for this directory. Please add or commit, or move the file elsewhere.")
             return {'FINISHED'}
         
-        if os.name == "posix":
+        if platform.system == "Darwin": # or "Linux"
         #On Unix:
-            myLogger.info("Starting repo creation via filesystem.")
+            myLogger.info("Start creating repository via filesystem.")
             # Create a parent directory .svnrepos where you will place your SVN repositories:
-            # !! This might already exist.
+            # !! Check prefs and existence!!
             #  mkdir -p $HOME/.svnrepos/
-            myLogger.info("Created repository at: ")
+            myLogger.info(f'Created repository home at: {prefs["str_prefSVNRepoHome"]}')
             
             # Create a new repository MyRepo under .svnrepos:
             #  svnadmin create ~/.svnrepos/MyRepo
@@ -227,7 +235,7 @@ class CreateAndImportOperator(bpy.types.Operator):
             #  file://$HOME/.svnrepos/MyRepo/trunk \
             #  file://$HOME/.svnrepos/MyRepo/branches \
             #  file://$HOME/.svnrepos/MyRepo/tags
-            myLogger.info("Successfully created repository at: ")
+            myLogger.info(f'Created repository structure in: {prefs["str_prefSVNRepoHome"] + Path(filepath).parent.stem}')
             
             # Change directory to ./MyProject where your unversioned project is located:
             #  cd $HOME/MyProject
@@ -239,9 +247,9 @@ class CreateAndImportOperator(bpy.types.Operator):
             #  svn commit -m "Initial import."
             # Update your working copy:
             #  svn update
-            myLogger.info("Completed importing.")
+            myLogger.info('Completed importing {filename} to repository.')
 
-        #if os.name == "nt":
+        #if platform.system == "Windows":
         #On Windows:
             # Create a parent directory C:\Repositories where you will place your SVN repositories:
             #  mkdir C:\Repositories
@@ -274,13 +282,18 @@ class AddOperator(bpy.types.Operator):
 
     def execute(self, context):
         
+        filepath = bpy.data.filepath
+        filename = Path(filepath).stem
+        working_dir = Path(filepath).parent
+
         # Confirm that there is a working set available.
-        process = subprocess.Popen(svn_commands["svn_info"],
+        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
         if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report({'ERROR'}, stderr.decode('utf-8') + " Please import to a new repository or check out from an existing repository(!)")
+            self.report({'ERROR'}, "There is not working set for this directory. Please create a new repository or move the file to an existing working set.")
+            
             return {'FINISHED'}
         
         # Confirm that that the file is saved
@@ -288,34 +301,61 @@ class AddOperator(bpy.types.Operator):
             self.report({'ERROR'}, "File has not been saved. Please save before committing.")
             return {'FINISHED'}
 
+        #TODO: ADD OPERATION
+
+
+        myLogger.info(f'Added {filepath} to working set.')
+        self.report({'INFO'}, f'Added {filepath} to working set.')
+        return {'FINISHED'}
 
 ## Commit Operator
 ## Commit current file
 class CommitOperator(bpy.types.Operator):
     bl_idname = "scop.commit"
-    bl_label  = "Commit"
+    bl_label  = "Commit & Update"
 
     def execute(self, context):
+
+        filepath = bpy.data.filepath
+        filename = Path(filepath).stem
+        working_dir = Path(filepath).parent
+
+        # Confirm file state
+        if not bpy.data.is_saved:
+            self.report({'ERROR'}, "This file has not been saved to your drive. Please save it before committing.")
+            return {'FINISHED'}
+        if bpy.data.is_dirty:
+            self.report({'ERROR'}, "This file has unsaved changes. Please save before committing.")
+            return {'FINISHED'}
+
         # Confirm that there is a working set available.
-        process = subprocess.Popen(svn_commands["svn_info"],
+        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
         if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report({'ERROR'}, stderr.decode('utf-8') + " Please import to a new repository or check out from an existing repository(!)")
+            self.report({'ERROR'}, stderr.decode('utf-8') + "There is no working set available for this folder. Please create or chekout one, or move this file into one.")
             return {'FINISHED'}
         
         # Confirm that this file is added to the working set.
         #TODO!
-        
-        # Confirm file state
-        if not bpy.data.is_saved:
-            self.report({'ERROR'}, "File has not been saved. Please save before committing.")
-            return {'FINISHED'}
-        if bpy.data.is_dirty:
-            self.report({'ERROR'}, "File has unsaved changes. Please save before committing.")
-            return {'FINISHED'}
+        #  The first seven columns in the output are each one character wide:
+        #    First column: Says if item was added, deleted, or otherwise changed
+        #    ' ' no modifications
+        #    'A' Added
+        #    'C' Conflicted
+        #    'D' Deleted
+        #    'I' Ignored
+        #    'M' Modified
+        #    'R' Replaced
+        #    'X' an unversioned directory created by an externals definition
+        #    '?' item is not under version control
+        #    '!' item is missing (removed by non-svn command) or incomplete
+        #    '~' versioned item obstructed by some item of a different kind
 
+        myLogger.info(f'Committed {filepath}.')
+        self.report({'INFO'}, f'Committed {filepath}.')
+        return {'FINISHED'}
 
 
 ###########################

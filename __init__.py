@@ -91,9 +91,10 @@ prefs = dict(
 svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_version": ["svn","--version"],
                 "svn_info": ["svn","info"], # E155007 'not a working copy'
-                "svn_status": ["svn","status"], # W155007 'not a working copy'
+                "svn_status": ["svn","status","-v"], # W155007 'not a working copy'
                 "svn_admin_version": ["svnadmin","--version","--quiet"],
-                "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"] }
+                "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"],
+                "svn_add_single": ["svn","add"] }
 
 
 
@@ -186,12 +187,12 @@ except FileNotFoundError:
 ### Operators        ###
 ########################
 
-# create repo
-# (svn_import - ??) <- bundle initial add?
+# CREATE REPO
 # ADD
+# COMMIT
+# VERSION HISTORY
 # REVERT VERSION
-# branch (copy)
-# changelist
+# BRANCH (copy)
 # DIFF
 
 ## Create Repo Operator
@@ -304,18 +305,54 @@ class AddOperator(bpy.types.Operator):
             self.report({'ERROR'}, "File has not been saved. Please save before committing.")
             return {'FINISHED'}
 
-        #TODO: ADD OPERATION
+        myLogger.info(f'Attempting to add file \'{filepath}\'.')
 
+        # Confirm that file is ready to be added and has outstanding changes
+        process = subprocess.Popen(svn_commands["svn_status"] + [filepath],
+                     stdout=subprocess.PIPE, 
+                     stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        if len(stdout)>1:
+            result = stdout.decode('utf-8')
+            status = result[0]
+            if status in [' ','A','C','M']:
+                self.report({'ERROR'},"File is already added to the working set.")
+            elif status == 'I':
+                self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
+            elif status in ['?','D']:
+                process = subprocess.Popen(svn_commands["svn_add_single"] + [filepath],
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+                stdout, stderr = process.communicate()
+                if len(stdout)>0:
+                    result = stdout.decode('utf-8')
+                    myLogger.info(result.replace('\n',' '))
+                    myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
+                    self.report({'INFO'},result.replace('\n',' '))
+                elif len(stderr)>0:
+                    result = stderr.decode('utf-8')
+                    myLogger.error(result)
+                    self.report({'ERROR'},result)
+                else:
+                    myLogger.error(f'Error when committing file: {process.returncode}')
+                    self.report({'ERROR'},f'Error when committing file: {process.returncode}')
+            else:
+                myLogger.error(f'File has unsupported status \'{status}\'.')
+                self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
+        elif len(stderr>1):
+            result = stderr.decode('utf-8')
+            myLogger.error(f'Error committing file {filepath}: \'{result}\'.')
+        else:
+            myLogger.error(f'Error when committing file: {process.returncode}')
+            self.report({'ERROR'},f'Error when committing file: {process.returncode}')
 
-        myLogger.info(f'Added {filepath} to working set.')
-        self.report({'INFO'}, f'Added {filepath} to working set.')
         return {'FINISHED'}
 
 ## Commit Operator
 ## Commit current file
 class CommitOperator(bpy.types.Operator):
     bl_idname = "scop.commit"
-    bl_label  = "Commit & Update"
+    bl_label  = "Commit"
 
     def execute(self, context):
 
@@ -340,8 +377,7 @@ class CommitOperator(bpy.types.Operator):
             self.report({'ERROR'}, stderr.decode('utf-8') + "There is no working set available for this folder. Please create or chekout one, or move this file into one.")
             return {'FINISHED'}
         
-        # Confirm that this file is added to the working set.
-        #TODO!
+        # Confirm status of file in current local working set
         #  The first seven columns in the output are each one character wide:
         #    First column: Says if item was added, deleted, or otherwise changed
         #    ' ' no modifications
@@ -356,19 +392,48 @@ class CommitOperator(bpy.types.Operator):
         #    '!' item is missing (removed by non-svn command) or incomplete
         #    '~' versioned item obstructed by some item of a different kind
 
+        myLogger.info(f'Attempting to commit file \'{filepath}\'.')
+
         # Confirm that file is added and has outstanding changes
-        process = subprocess.Popen(svn_commands["svn_commit_single"] + [filepath],
+        process = subprocess.Popen(svn_commands["svn_status"] + [filepath],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
-        if len(stdout)<1:
+        if len(stdout)>1:
             result = stdout.decode('utf-8')
-            myLogger.info(result)
-            self.report({'INFO'},result)
-        else:
+            status = result[0]
+            if status == ' ':
+                self.report({'ERROR'},"File has no oustanding changes to commit.")
+            elif status == '?':
+                self.report({'ERROR'},"File has not been added to the working set. Please add it before committing.")
+            elif status == 'I':
+                self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
+            elif status == 'M':
+                process = subprocess.Popen(svn_commands["svn_commit_single"] + [filepath],
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+                stdout, stderr = process.communicate()
+                if len(stdout)>0:
+                    result = stdout.decode('utf-8')
+                    myLogger.info(result.replace('\n',' '))
+                    myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
+                    self.report({'INFO'},result.replace('\n',' '))
+                elif len(stderr)>0:
+                    result = stderr.decode('utf-8')
+                    myLogger.error(result)
+                    self.report({'ERROR'},result)
+                else:
+                    myLogger.error(f'Error when committing file: {process.returncode}')
+                    self.report({'ERROR'},f'Error when committing file: {process.returncode}')
+            else:
+                myLogger.error(f'File has unsupported status \'{status}\'.')
+                self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
+        elif len(stderr>1):
             result = stderr.decode('utf-8')
-            myLogger.error(result)
-            self.report({'ERROR'},result)
+            myLogger.error(f'Error committing file {filepath}: \'{result}\'.')
+        else:
+            myLogger.error(f'Error when committing file: {process.returncode}')
+            self.report({'ERROR'},f'Error when committing file: {process.returncode}')
 
         return {'FINISHED'}
 

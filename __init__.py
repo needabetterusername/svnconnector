@@ -77,6 +77,10 @@ svn_ra_svn       = False
 svnadmin_avail   = False
 svnadmin_version = ""
 
+# TODO: Need to handle file changes. E.g. file is re-saved with new name.
+## File SVN Status
+svn_file_status  = ''
+
 ## Define default preferences
 ## TODO: Move this to prefs file
 prefs = dict(
@@ -94,7 +98,8 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_status": ["svn","status","-v"], # W155007 'not a working copy'
                 "svn_admin_version": ["svnadmin","--version","--quiet"],
                 "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"],
-                "svn_add_single": ["svn","add"] }
+                "svn_add_single": ["svn","add"],
+                "svn_revert_previous": ["svn","revert"]}
 
 
 
@@ -181,19 +186,55 @@ except FileNotFoundError:
     myLogger.error(error)
     myLogger.error("\'svnadmin\' command could not be found.")
 
+########################
+### Utility Funcs    ###
+########################
 
+## Get the SVN status of the file at filepath
+# From svn help status
+#  Confirm status of file in current local working set
+#   The first seven columns in the output are each one character wide:
+#     First column: Says if item was added, deleted, or otherwise changed
+#     ' ' no modifications
+#     'A' Added
+#     'C' Conflicted
+#     'D' Deleted
+#     'I' Ignored
+#     'M' Modified
+#     'R' Replaced
+#     'X' an unversioned directory created by an externals definition
+#     '?' item is not under version control
+#     '!' item is missing (removed by non-svn command) or incomplete
+#     '~' versioned item obstructed by some item of a different kind
+def getSvnFileStatus(filepath):
+    process = subprocess.Popen(svn_commands["svn_status"] + [filepath],
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+
+    if len(stdout)>1:
+        result = stdout.decode('utf-8')
+        return None, result[0]
+    elif len(stderr)>1:
+        error = stderr.decode('utf-8')
+        return error, None
+    else:
+        return f'Command returned code: {process.returncode}', None
 
 ########################
 ### Operators        ###
 ########################
 
-# CREATE REPO
-# ADD
-# COMMIT
-# VERSION HISTORY
-# REVERT VERSION
-# BRANCH (copy)
-# DIFF
+# ~ CREATE REPO
+# √ ADD
+# √ COMMIT
+#   VERSION HISTORY -> Move to info panel w/dismiss - svn log [-q] filename
+# > REVERT VERSION PREVIOUS
+#   REVERT VERSION N
+# o BRANCH (copy)
+#   MERGE BRANCH
+#   DELETE BRANCH
+#   DIFF
 
 ## Create Repo Operator
 #   Create a new repo of the current working directory.
@@ -307,19 +348,16 @@ class AddOperator(bpy.types.Operator):
 
         myLogger.info(f'Attempting to add file \'{filepath}\'.')
 
-        # Confirm that file is ready to be added and has outstanding changes
-        process = subprocess.Popen(svn_commands["svn_status"] + [filepath],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if len(stdout)>1:
-            result = stdout.decode('utf-8')
-            status = result[0]
+        # Confirm file's SVN status
+        # Acceptable for add '?' only
+        err, status = getSvnFileStatus(filepath)
+
+        if not err:
             if status in [' ','A','C','M']:
                 self.report({'ERROR'},"File is already added to the working set.")
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
-            elif status in ['?','D']:
+            elif status in ['?']:
                 process = subprocess.Popen(svn_commands["svn_add_single"] + [filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
@@ -339,12 +377,9 @@ class AddOperator(bpy.types.Operator):
             else:
                 myLogger.error(f'File has unsupported status \'{status}\'.')
                 self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
-        elif len(stderr>1):
-            result = stderr.decode('utf-8')
-            myLogger.error(f'Error committing file {filepath}: \'{result}\'.')
         else:
-            myLogger.error(f'Error when committing file: {process.returncode}')
-            self.report({'ERROR'},f'Error when committing file: {process.returncode}')
+            myLogger.error(err)
+            self.report(err)
 
         return {'FINISHED'}
 
@@ -376,39 +411,21 @@ class CommitOperator(bpy.types.Operator):
         if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
             self.report({'ERROR'}, stderr.decode('utf-8') + "There is no working set available for this folder. Please create or chekout one, or move this file into one.")
             return {'FINISHED'}
-        
-        # Confirm status of file in current local working set
-        #  The first seven columns in the output are each one character wide:
-        #    First column: Says if item was added, deleted, or otherwise changed
-        #    ' ' no modifications
-        #    'A' Added
-        #    'C' Conflicted
-        #    'D' Deleted
-        #    'I' Ignored
-        #    'M' Modified
-        #    'R' Replaced
-        #    'X' an unversioned directory created by an externals definition
-        #    '?' item is not under version control
-        #    '!' item is missing (removed by non-svn command) or incomplete
-        #    '~' versioned item obstructed by some item of a different kind
 
         myLogger.info(f'Attempting to commit file \'{filepath}\'.')
 
-        # Confirm that file is added and has outstanding changes
-        process = subprocess.Popen(svn_commands["svn_status"] + [filepath],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if len(stdout)>1:
-            result = stdout.decode('utf-8')
-            status = result[0]
+        # Confirm file status
+        # Acceptable for commit: 'A','M'
+        err, status = getSvnFileStatus(filepath)
+
+        if not err:
             if status == ' ':
                 self.report({'ERROR'},"File has no oustanding changes to commit.")
             elif status == '?':
                 self.report({'ERROR'},"File has not been added to the working set. Please add it before committing.")
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
-            elif status == 'M':
+            elif status in ['M','A']:
                 process = subprocess.Popen(svn_commands["svn_commit_single"] + [filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
@@ -428,25 +445,82 @@ class CommitOperator(bpy.types.Operator):
             else:
                 myLogger.error(f'File has unsupported status \'{status}\'.')
                 self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
-        elif len(stderr>1):
-            result = stderr.decode('utf-8')
-            myLogger.error(f'Error committing file {filepath}: \'{result}\'.')
         else:
-            myLogger.error(f'Error when committing file: {process.returncode}')
-            self.report({'ERROR'},f'Error when committing file: {process.returncode}')
+            myLogger.error(err)
+            self.report({'ERROR'},err)
 
         return {'FINISHED'}
 
 
-###########################
-### Blender GUI Objects ###
-###########################
+## Revert Operator
+## Revert to Previously Committed State
+class RevertPreviousOperator(bpy.types.Operator):
+    bl_idname = "scop.revert_previous"
+    bl_label  = "Revert to Previous"
+
+    def execute(self, context):
+
+        filepath = bpy.data.filepath
+        filename = Path(filepath).stem
+        working_dir = Path(filepath).parent
+
+
+        # Confirm that there is a working set available.
+        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
+                     stdout=subprocess.PIPE, 
+                     stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
+            self.report({'ERROR'}, stderr.decode('utf-8') + "There is no working set available for this folder. No reversion possible.")
+            return {'FINISHED'}
+
+        myLogger.info(f'Attempting to commit file \'{filepath}\'.')
+
+        # Confirm file status
+        # Acceptable for commit: ' ','M'
+        #  if 'M' -> svn revert filename 
+        #  if ' ' -> svn export --force -r PREV filename filename 
+        #         or svn merge -r HEAD:123 .
+        #            svn commit -m "Reverted to revision 123"
+        err, status = getSvnFileStatus(filepath)
+        if not err:
+            if status in ['M','A']:
+                process = subprocess.Popen(svn_commands["svn_revert_previous"] + [filepath],
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+                stdout, stderr = process.communicate()
+                if len(stdout)>0:
+                    result = stdout.decode('utf-8')
+                    myLogger.info(result.replace('\n',' '))
+                    myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
+                    self.report({'INFO'},result.replace('\n',' '))
+                elif len(stderr)>0:
+                    result = stderr.decode('utf-8')
+                    myLogger.error(result)
+                    self.report({'ERROR'},result)
+                else:
+                    myLogger.error(f'Error when committing file: {process.returncode}')
+                    self.report({'ERROR'},f'Error when committing file: {process.returncode}')
+            else:
+                myLogger.error(f'File has unsupported status \'{status}\'.')
+                self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
+        else:
+            myLogger.error(err)
+            self.report(err)
+
+        return {'FINISHED'}
+
+#################################
+### Blender GUI Class Objects ###
+#################################
 
 # Preferences Object
 class ExampleAddonPreferences(AddonPreferences):
     # This must match the add-on name. Use '__package__'
     # if defining this in a SUBMODULE of a python package.
     bl_idname = __name__
+
+    # TODO: Add application state.
 
     boolean: BoolProperty(
         name="Use Default local SVN Repository Home",
@@ -478,30 +552,73 @@ class ExampleAddonPreferences(AddonPreferences):
 ## SVN Connector main menu
 #   https://docs.blender.org/api/current/bpy.types.Menu.html#bpy.types.Menu.draw
 class SvnSubMenu(bpy.types.Menu):
-    bl_idname = "OBJECT_MT_svn_submenu"
+    bl_idname = "OBJECT_MT_SVN_submenu"
     bl_label = "SVN Connector"
 
     def draw(self, context):
         layout = self.layout
 
-        layout.operator("scop.create_import", text="Create Repo & Import")
-        layout.operator("scop.add", text="Add")
+        # Append in order of expected frequency of use
         layout.operator("scop.commit", text="Commit")
-        #layout.operator(scop.CommitOperator.bd_idname, text="Commit")
-        #layout.operator("object.select_all", text="Inverse").action = 'INVERT'
-        #layout.operator("object.select_random", text="Random")
+        layout.operator("scop.revert_previous")
+        layout.operator("scop.add", text="Add")
+        layout.operator("scop.create_import", text="Create Repo & Import")
 
 
 # Function to draw the menu item.
+# This function is passed to blender and called each time the parent menu is drawn.
 def menu_draw_svn(self, context):
     #self.layout.operator("wm.save_homefile")
-    self.layout.menu("OBJECT_MT_svn_submenu")
+    self.layout.menu("OBJECT_MT_SVN_submenu")
+
+
+## INFO Panels
+class SvnInfoPanel(bpy.types.Panel):
+    bl_idname = "SVN_PT_InfoPanel"
+    bl_label = "SVN Info"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "SVNConnector"
+    #bl_context = "objectmode"
+
+    def draw(self, context):
+
+        layout = self.layout
+
+        row = layout.row()
+        row.label(text=f'svn_version: {svn_version}')
+        row = layout.row()
+        row.label(text=f'svn_ra_local: {svn_ra_local}')
+        row = layout.row()
+        row.label(text=f'svn_ra_svn: {svn_ra_svn}')
+
+        row = layout.row()
+        row.label(text=f'svnadmin_avail: {svnadmin_avail}')
+        row = layout.row()
+        row.label(text=f'svnadmin_version: {svnadmin_version}') 
+
+## INFO Panels
+class SvnStatusPanel(bpy.types.Panel):
+    bl_idname = "SVN_PT_StatusPanel"
+    bl_label = "SVN Status"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "SVNConnector"
+    #bl_context = "objectmode"
+
+    def draw(self, context):
+
+        layout = self.layout
+
+        row = layout.row()
+        row.label(text=f'File status: \'M\'')
+        
 
 
 
-#############################
-### BLENDER API INTERFACE ###
-#############################
+###############################
+### BLENDER ADDON INTERFACE ###
+###############################
 
 bl_info = {
  "name": "Shabby's SVN Connector",
@@ -518,6 +635,8 @@ bl_info = {
 
 def register():    
     myLogger.info(f'Registering classes defined in module {__name__}')
+
+    # TODO: Check application state and register as appropriate.
 
     for name, cls in inspect.getmembers(sys.modules[__name__], lambda x: inspect.isclass(x) and (x.__module__ == __name__)):
         myLogger.debug(f'Registering class {cls} with name {name}')

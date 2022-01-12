@@ -30,8 +30,8 @@ This is a simple addon to add more backup to your blend files.
 - When you create with confidence, you create great things.
 - "Error recovery, not error avoidance." -Pixar?
 
-## Yer, yer, I know VCS like I know Kung Fu
-Cool, then this just connects Blender with SVN and adds basic commit and revert functionality.
+## Yer, yer, I know VCS better than I know Kung Fu
+Cool, then this just automates the SVN executables on the local system via python to ptovide basic commit and revert functionality.
 
 
 

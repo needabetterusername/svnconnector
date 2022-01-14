@@ -767,7 +767,7 @@ class SvnStatusPanel(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "SVNConnector"
-    #bl_context = "objectmode"
+
 
     def draw(self, context):
 
@@ -777,16 +777,17 @@ class SvnStatusPanel(bpy.types.Panel):
         row = layout.row()
         row.label(text=f'File status: \'{status}\'')
 
+
     @persistent
-    def fileUpdateHandler(self,dummy, arg1, arg2):
-        self.file_status = getSvnFileStatus(bpy.data.filepath)
-    
+    def fileUpdateHandler(self, arg0, arg1):
+        return
 
-    # def __init__(self) -> None:
-    #     super().__init__()
 
-    #     bpy.app.handlers.load_post.append(self.fileUpdateHandler)
-    #     bpy.app.handlers.save_post.append(self.fileUpdateHandler)
+    def __init__(self) -> None:
+        super().__init__()
+
+        bpy.app.handlers.load_post.append(self.fileUpdateHandler)
+        bpy.app.handlers.save_post.append(self.fileUpdateHandler)
 
 
 ###############################

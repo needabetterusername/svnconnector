@@ -33,6 +33,7 @@
 import bpy
 from bpy.types import Attribute, Operator, AddonPreferences, STATUSBAR_HT_header
 from bpy.props import StringProperty, IntProperty, BoolProperty
+from bpy.app.handlers import persistent
 
 import sys, inspect, logging
 import platform, subprocess, re, gettext
@@ -770,11 +771,22 @@ class SvnStatusPanel(bpy.types.Panel):
 
     def draw(self, context):
 
-        layout = self.layout
+        err, status = getSvnFileStatus(bpy.data.filepath)
 
+        layout = self.layout
         row = layout.row()
-        row.label(text=f'File status: \'M\'')
-        
+        row.label(text=f'File status: \'{status}\'')
+
+    @persistent
+    def fileUpdateHandler(self,dummy, arg1, arg2):
+        self.file_status = getSvnFileStatus(bpy.data.filepath)
+    
+
+    # def __init__(self) -> None:
+    #     super().__init__()
+
+    #     bpy.app.handlers.load_post.append(self.fileUpdateHandler)
+    #     bpy.app.handlers.save_post.append(self.fileUpdateHandler)
 
 
 ###############################

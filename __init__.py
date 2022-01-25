@@ -102,7 +102,7 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_admin_version": ["svnadmin","--version","--quiet"],
                 "svn_admin_create": ["svnadmin", "create"],
                 "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"],
-                "svn_add_single": ["svn","add"],
+                "svn_add_single": ["svn","add","--parents"],
                 "svn_update": ["svn", "update"],
                 "svn_revert_previous": ["svn","revert"],
                 "svn_mkdir_repo": ["svn", "mkdir", "-m \'Create directory structure.\'"],
@@ -226,8 +226,15 @@ def getSvnFileStatus(filepath):
         result = stdout.decode('utf-8')
         return None, result[0]
     elif len(stderr)>1:
+        # Warnings will be returned on stderr.
         error = stderr.decode('utf-8')
-        return error, None
+        
+        # We want to allow 'warning: W155010: The node ... was not found.'
+        # This just means that the parents are not added.
+        if len(re.findall("W155010", error))>0:
+            return None, '?'
+        else:
+            return error, None
     else:
         return f'Command returned code: {process.returncode}', None
 
@@ -529,7 +536,7 @@ class AddOperator(bpy.types.Operator):
                 self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
         else:
             myLogger.error(err)
-            self.report(err)
+            self.report({'ERROR'},err)
 
         return {'FINISHED'}
 

@@ -99,14 +99,17 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_version": ["svn","--version"],
                 "svn_info": ["svn","info"], # E155007 'not a working copy'
                 "svn_status": ["svn","status","-v"], # W155007 'not a working copy'
+                "svn_revision": ["svn","info"],
                 "svn_admin_version": ["svnadmin","--version","--quiet"],
                 "svn_admin_create": ["svnadmin", "create"],
                 "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"],
                 "svn_add_single": ["svn","add","--parents"],
                 "svn_update": ["svn", "update"],
                 "svn_revert_previous": ["svn","revert"],
+                "svn_update_previous": ["svn","update","-r"],
                 "svn_mkdir_repo": ["svn", "mkdir", "-m \'Create directory structure.\'"],
-                "svn_checkout": ["svn", "checkout"]}
+                "svn_checkout": ["svn", "checkout"],
+                "svn_get_revision": ["svn", "checkout"]}
 
 
 
@@ -127,7 +130,7 @@ if platform.system() == "Darwin": # | "Linux" | "Windows"
 else:
     myLogger.critical(f'Aborting init due to unsupported operating system type {platform.system()}')
     raise SystemError('This add-on has not been implemented for your OS.')
-    #TODO: This is probably no the graceful way to quit.
+    #TODO: This is probably not the graceful way to quit.
 
 
 ## Check python version
@@ -206,7 +209,7 @@ except FileNotFoundError as error:
 #   The first seven columns in the output are each one character wide:
 #     First column: Says if item was added, deleted, or otherwise changed
 #     ' ' no modifications
-#     'A' Added
+#     'A' (Schedule to be) Added
 #     'C' Conflicted
 #     'D' Deleted
 #     'I' Ignored
@@ -238,6 +241,41 @@ def getSvnFileStatus(filepath):
     else:
         return f'Command returned code: {process.returncode}', None
 
+
+## Get the revision number of the given node (file or directory)
+def getSvnRevision(filepath):
+    process = subprocess.Popen(svn_commands["svn_revision"] + [filepath],
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+
+    if len(stdout)>1:
+        result = stdout.decode('utf-8')
+
+        ## Extract repo number from the command's string response
+        # Revision: n
+        # Node Kind: directory | file
+        result = re.findall(r'Revision: \d+',result)
+        if len(result)<1:
+            result = 0
+        else:
+            result = re.findall(r'\d+',result[0])[0]
+
+        return None, int(result)
+    elif len(stderr)>1:
+        # Warnings will be returned on stderr.
+        error = stderr.decode('utf-8')
+        
+        # We want to allow 'warning: W155010: The node ... was not found.'
+        # This just means that the parents are not added.
+        if len(re.findall("W155010", error))>0:
+            return None, '?'
+        else:
+            return error, None
+    else:
+        return f'Command returned code: {process.returncode}', None
+
+
 ## Generate a repo name based on the current folder
 def generateRepoName(filepath):
     result = Path(filepath).parent.name
@@ -251,7 +289,7 @@ def generateRepoName(filepath):
 # √ ADD
 # √ COMMIT
 #   VERSION HISTORY -> Move to info panel w/dismiss - svn log [-q] filename
-#   REVERT VERSION PREVIOUS
+# √ REVERT VERSION PREVIOUS
 #   REVERT VERSION N
 #   BRANCH (copy)
 #   MERGE BRANCH
@@ -610,10 +648,12 @@ class CommitOperator(bpy.types.Operator):
 
 
 ## Revert Operator
-## Revert to Previously Committed State
+## Revert the file in the current working copy
+#  to that of the (todo: a) previous revision.
+#  I.e. undo changes for THIS file.
 class RevertPreviousOperator(bpy.types.Operator):
     bl_idname = "scop.revert_previous"
-    bl_label  = "Revert to Previous"
+    bl_label  = "Revert to Previous Commit"
 
     def execute(self, context):
 
@@ -636,13 +676,17 @@ class RevertPreviousOperator(bpy.types.Operator):
 
         # Confirm file status
         # Acceptable for commit: ' ','M'
-        #  if 'M' -> svn revert filename 
-        #  if ' ' -> svn export --force -r PREV filename filename 
-        #         or svn merge -r HEAD:123 .
-        #            svn commit -m "Reverted to revision 123"
+        #  if 'M' -> Uncomitted changes, so:
+        #            svn revert filename
+        #  if ' ' -> Changes were previously comitted, so:
+        #            svn update -r N filename
+        #           old:
+        #              svn export --force -r PREV filename filename 
+        #           or svn merge -r HEAD:123 .
+        #         then svn commit -m "Reverted to revision 123"
         err, status = getSvnFileStatus(filepath)
         if not err:
-            if status in ['M','A']:
+            if status == 'M':
                 process = subprocess.Popen(svn_commands["svn_revert_previous"] + [filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
@@ -650,15 +694,46 @@ class RevertPreviousOperator(bpy.types.Operator):
                 if len(stdout)>0:
                     result = stdout.decode('utf-8')
                     myLogger.info(result.replace('\n',' '))
-                    myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
+                    myLogger.debug(f'Successfully reverted. Return code: \'{process.returncode}\'.')
                     self.report({'INFO'},result.replace('\n',' '))
+
+                    bpy.ops.wm.revert_mainfile()
+
                 elif len(stderr)>0:
                     result = stderr.decode('utf-8')
                     myLogger.error(result)
                     self.report({'ERROR'},result)
                 else:
-                    myLogger.error(f'Error when committing file: {process.returncode}')
-                    self.report({'ERROR'},f'Error when committing file: {process.returncode}')
+                    myLogger.error(f'Error when reverting file with status {status}: {process.returncode}')
+                    self.report({'ERROR'},f'Error when reverting file with status {status}: {process.returncode}')
+            elif status == ' ':
+                #Get and adjust revision number
+                err, revnum = getSvnRevision(filepath)
+                if revnum > 1:
+                    revnum -= 1
+
+                    myLogger.info(f'Attempting to refert file to revision {revnum}.')
+                    #execute update command
+                    process = subprocess.Popen(svn_commands["svn_update_previous"] + [str(revnum)] + [filepath],
+                                stdout=subprocess.PIPE, 
+                                stderr=subprocess.PIPE)
+                    stdout, stderr = process.communicate()
+                    if len(stdout)>0:
+                        result = stdout.decode('utf-8')
+                        myLogger.info(result.replace('\n',' '))
+                        myLogger.debug(f'Successfully reverted. Return code: \'{process.returncode}\'.')
+                        self.report({'INFO'},result.replace('\n',' '))
+
+                        bpy.ops.wm.revert_mainfile()
+                        
+                    elif len(stderr)>0:
+                        result = stderr.decode('utf-8')
+                        myLogger.error(result)
+                        self.report({'ERROR'},result)
+                else:
+                    myLogger.error(f'Could not revert: File is already at first revision.')
+                    self.report({'ERROR'},f'Could not revert: File is already at first revision.')
+
             else:
                 myLogger.error(f'File has unsupported status \'{status}\'.')
                 self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
@@ -725,9 +800,9 @@ class SvnSubMenu(bpy.types.Menu):
         layout = self.layout
 
         # Append in order of expected frequency of use
-        layout.operator("scop.commit", text="Commit")
+        layout.operator("scop.commit", text="Commit your changes")
         layout.operator("scop.revert_previous")
-        layout.operator("scop.add", text="Add")
+        layout.operator("scop.add", text="Include this file")
         layout.operator("scop.create_import", text="Commit to new repo")
 
 
@@ -778,11 +853,14 @@ class SvnStatusPanel(bpy.types.Panel):
 
     def draw(self, context):
 
-        err, status = getSvnFileStatus(bpy.data.filepath)
+        err_status, status = getSvnFileStatus(bpy.data.filepath)
+        err_revision, revision = getSvnRevision(bpy.data.filepath)
 
         layout = self.layout
         row = layout.row()
-        row.label(text=f'File status: \'{status}\'')
+        row.label(text=f'File status: \'{"err" if err_status else status}\'')
+        row =layout.row()
+        row.label(text=f'File revision: \'{"err" if err_revision else revision}\'')
 
 
     @persistent

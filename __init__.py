@@ -103,6 +103,7 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_admin_version": ["svnadmin","--version","--quiet"],
                 "svn_admin_create": ["svnadmin", "create"],
                 "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"],
+                "svn_commit_all": ["svn","commit","-m \'Commit from svnconnector.\'"],
                 "svn_add_single": ["svn","add","--parents"],
                 "svn_update": ["svn", "update"],
                 "svn_revert_previous": ["svn","revert"],
@@ -621,7 +622,13 @@ class CommitOperator(bpy.types.Operator):
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
             elif status in ['M','A']:
+                # Issue #20 : No direct way to commit with parents (first file commit in new folder).
+                #      Need to check and commit separately.
+                #      As a workaround, commit all. But this will add axtraneous versions or other files,
+                #      confusing the user.
+                # Workaround bug: Need to set working folder for command as filepath (parent).
                 process = subprocess.Popen(svn_commands["svn_commit_single"] + [filepath],
+                #process = subprocess.Popen(svn_commands["svn_commit_all"],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()

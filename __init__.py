@@ -17,7 +17,7 @@
 #       to better compatibility accross svn versions.
 #     - This add-on is not yet localized.
 #     - Diff will be implemented in text first. If practical, a binary diff would be 
-#       useful, 
+#       useful.
 #
 #     - Blender 'installs' (copies) addons to the following locations:
 #       MacOS: /Users/{user}/Library/Application Support/Blender/{versions}/
@@ -35,7 +35,7 @@ from bpy.types import Attribute, Operator, AddonPreferences, STATUSBAR_HT_header
 from bpy.props import StringProperty, IntProperty, BoolProperty
 from bpy.app.handlers import persistent
 
-import sys, inspect, logging
+import os, sys, inspect, logging
 import platform, subprocess, re, gettext
 
 from pathlib import Path
@@ -99,6 +99,7 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_version": ["svn","--version"],
                 "svn_info": ["svn","info"], # E155007 'not a working copy'
                 "svn_status": ["svn","status","-v"], # W155007 'not a working copy'
+                "svn_status_all": ["svn","status"],
                 "svn_revision": ["svn","info"],
                 "svn_admin_version": ["svnadmin","--version","--quiet"],
                 "svn_admin_create": ["svnadmin", "create"],
@@ -110,7 +111,8 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_update_previous": ["svn","update","-r"],
                 "svn_mkdir_repo": ["svn", "mkdir", "-m \'Create directory structure.\'"],
                 "svn_checkout": ["svn", "checkout"],
-                "svn_get_revision": ["svn", "checkout"]}
+                "svn_get_revision": ["svn", "checkout"],
+                "svn_get_wc-root": ["svn", "info", "--show-item", "wc-root"]}
 
 
 
@@ -204,7 +206,7 @@ except FileNotFoundError as error:
 ### Utility Funcs    ###
 ########################
 
-## Get the SVN status of the file at filepath
+## Get the SVN status of the repo or file at filepath
 # From svn help status
 #  Confirm status of file in current local working set
 #   The first seven columns in the output are each one character wide:
@@ -220,6 +222,28 @@ except FileNotFoundError as error:
 #     '?' item is not under version control
 #     '!' item is missing (removed by non-svn comman    d) or incomplete
 #     '~' versioned item obstructed by some item of a different kind
+def getSvnStatus(wc_root):
+    process = subprocess.Popen(svn_commands["svn_status_all"] + [wc_root],
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+
+    if len(stdout)>1:
+        result = stdout.decode('utf-8')
+        myLogger.debug(f'Got svn_status {result}.')
+
+        return None, result
+
+    elif len(stderr)>1:
+        # Warnings will be returned on stderr.
+        error = stderr.decode('utf-8')
+        
+        return error, None
+
+    else:
+        return f'Command returned code: {process.returncode}', None
+
+
 def getSvnFileStatus(filepath):
     process = subprocess.Popen(svn_commands["svn_status"] + [filepath],
                 stdout=subprocess.PIPE, 
@@ -281,6 +305,63 @@ def getSvnRevision(filepath):
 def generateRepoName(filepath):
     result = Path(filepath).parent.name
     return result
+
+
+## Get the Root dir of the Working Copy
+def getSVNWCRoot(filepath):
+    process = subprocess.Popen(svn_commands["svn_info"] + [filepath],
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+
+    if len(stdout)>1:
+        result = stdout.decode('utf-8')
+
+        wc_root = result.split('\n')[2]
+        wc_root = wc_root[wc_root.find(':')+1::].strip()
+
+        return None, wc_root
+
+    elif len(stderr)>1:
+        # Warnings will be returned on stderr.
+        error = stderr.decode('utf-8')
+        
+        return error, None
+
+    else:
+        return f'Command returned code: {process.returncode}', None
+
+
+## Get parents to add in case of E200009
+def getCommitListWithParents(filepath, wc_root, svn_status):
+
+    sep = os.sep    
+    relpaths = filepath[len(wc_root)+1::]
+    result = []
+
+    myLogger.debug(f'Creating commitlist for filepath {filepath} against wc_root {wc_root}.')
+
+    ## Get a list of oustanding file/folder additions
+    svn_status = re.findall("^A.*$",svn_status,re.MULTILINE)
+    svn_status = [item[8::] for item in svn_status] #encoding issue
+    myLogger.debug(f'Using svn_status for interset {svn_status}.')
+
+    ## Better to use re iterator
+    for i in range(relpaths.count(sep)+1):
+        result.append(os.path.join(wc_root,relpaths))
+        relpaths = relpaths[:relpaths.rfind(os.sep):]
+
+    myLogger.debug(f'Using unintersected commitlist {result}.')
+
+    ## Need to cross-reference against svn status results
+    #  Intersect
+    result = [value for value in result if value in svn_status]
+
+    myLogger.debug(f'Created commitlist {result}.')
+
+    return result
+
+
 
 ########################
 ### Operators        ###
@@ -533,7 +614,7 @@ class AddOperator(bpy.types.Operator):
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
         if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report({'ERROR'}, "There is not working set for this directory. Please create a new repository or move the file to an existing working set.")
+            self.report({'ERROR'}, "There is no working set for this directory. Please create a new repository or move the file to an existing working set.")
 
             return {'FINISHED'}
         
@@ -622,34 +703,57 @@ class CommitOperator(bpy.types.Operator):
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
             elif status in ['M','A']:
-                # Issue #20 : No direct way to commit with parents (first file commit in new folder).
-                #      Need to check and commit separately.
-                #      As a workaround, commit all. But this will add axtraneous versions or other files,
-                #      confusing the user.
-                # Workaround bug: Need to set working folder for command as filepath (parent).
+                ## Try to commit single file
                 process = subprocess.Popen(svn_commands["svn_commit_single"] + [filepath],
-                #process = subprocess.Popen(svn_commands["svn_commit_all"],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
+
                 if len(stdout)>0:
                     result = stdout.decode('utf-8')
                     myLogger.info(result.replace('\n',' '))
                     myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
                     self.report({'INFO'},result.replace('\n',' '))
-                elif len(stderr)>0:
-                    result = stderr.decode('utf-8')
-                    myLogger.error(result)
-                    self.report({'ERROR'},result)
+
+                elif len( re.findall("E200009", stderr.decode('utf-8')) )>0:
+                    err1, wc_root = getSVNWCRoot(filepath)
+                    if not err1:
+                        err2, svn_status = getSvnStatus(wc_root)
+
+                        if not(err2):
+                            commitlist = getCommitListWithParents(filepath,wc_root,svn_status)
+
+                            process = subprocess.Popen(svn_commands["svn_commit_all"] + commitlist,
+                                        stdout=subprocess.PIPE, 
+                                        stderr=subprocess.PIPE)
+                            stdout, stderr = process.communicate()
+
+                            if len(stdout)>0:
+                                result = stdout.decode('utf-8')
+                                myLogger.info(result.replace('\n',' '))
+                                myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
+                                self.report({'INFO'},result.replace('\n',' '))
+                            else:
+                                myLogger.error(f'Error when committing file with parents \'{stderr}\'.')
+                                myLogger.error(f'Error when committing commitlist \'{commitlist}\'.')
+                                self.report({'ERROR'},f'Error committing file \'{stderr}\'.')
+                        else:
+                            myLogger.error([err1])
+                            self.report({'ERROR'},[err1])
+
+                    else:
+                        myLogger.error([err1])
+                        self.report({'ERROR'},[err1])
                 else:
                     myLogger.error(f'Error when committing file: {process.returncode}')
                     self.report({'ERROR'},f'Error when committing file: {process.returncode}')
             else:
                 myLogger.error(f'File has unsupported status \'{status}\'.')
                 self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
-        else:
-            myLogger.error(err)
-            self.report({'ERROR'},err)
+        else:           
+
+            myLogger.error(result)
+            self.report({'ERROR'},result)
 
         return {'FINISHED'}
 

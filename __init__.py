@@ -126,8 +126,9 @@ myLogger.info(f'Got operating system: {platform.system()}')
 if platform.system() == "Darwin": # | "Linux" | "Windows"
     prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
     #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/" 
-# elif platform.system() == "Linux":
-#     prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/"
+elif platform.system() == "Linux":
+    prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
+    #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/"
 # elif platform.system() == "Windows":
 #     prefs["str_prefSVNRepoHome"] = "file:///C:/SVNRepository/"
 else:

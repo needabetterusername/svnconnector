@@ -79,13 +79,13 @@ svn_ra_svn       = False
 svnadmin_avail   = False
 svnadmin_version = ""
 
-# TODO: Need to handle file changes. E.g. file is re-saved with new name.
 ## File SVN Status
 svn_file_status  = ''
 
 ## Define default preferences
 ## TODO: Move this to prefs file
 prefs = dict(
+    str_prefSVNExecutable = None,
     bln_SVNUseDefaultLocalHome = True,
     str_prefSVNRepoHome = None,
     bln_SVNUseDefaultRepoName = True
@@ -124,9 +124,11 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
 #  https://stackoverflow.com/questions/1854/python-what-os-am-i-running-on/58071295#58071295
 myLogger.info(f'Got operating system: {platform.system()}')
 if platform.system() == "Darwin": # | "Linux" | "Windows"
+    prefs["str_prefSVNExecutable"] = "/usr/local/bin/svn"
     prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
     #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/" 
 elif platform.system() == "Linux":
+    prefs["str_prefSVNExecutable"] = "/usr/local/bin/svn"
     prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
     #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/"
 # elif platform.system() == "Windows":
@@ -865,7 +867,11 @@ class SVNConnectorAddonPreferences(AddonPreferences):
     # if defining this in a SUBMODULE of a python package.
     bl_idname = __name__
 
-    # TODO: Add application state.
+    svnExecutable: StringProperty(
+        name="\'svn\' executable",
+        subtype='FILE_PATH',
+        default=prefs["str_prefSVNExecutable"]
+    )
 
     useDefaultRepoRoot: BoolProperty(
         name="Use default local SVN Home Path",

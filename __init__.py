@@ -43,26 +43,6 @@ from datetime import datetime
 
 
 
-######################
-###  INIT/LOGGING  ###
-######################
-
-logFile = logging.FileHandler(filename=str(Path(__file__).parent/'svnconnector.log'),
-                                mode='w',
-                                encoding='utf-8')
-logFile.setFormatter(logging.Formatter('%(name)s: %(levelname)s %(message)s'))
-logging.basicConfig(level=logging.DEBUG, handlers=[logFile])
-
-myLogger = logging.getLogger('com.codetestdummy.blender.svnconnector')
-
-# console = logging.StreamHandler(stream=sys.stdout)
-# console.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s [%(thread)d]:  %(message)s'))
-# myLogger.addHandler(console)
-
-myLogger.info(f'Started session at {datetime.utcnow()}.')
-
-
-
 ##############################
 ### Application Attributes ###
 ##############################
@@ -85,7 +65,7 @@ svn_file_status  = ''
 ## Define default preferences
 ## TODO: Move this to prefs file
 prefs = dict(
-    str_prefSVNExecutable = None,
+    str_prefSVNExecutableDir = None,
     bln_SVNUseDefaultLocalHome = True,
     str_prefSVNRepoHome = None,
     bln_SVNUseDefaultRepoName = True
@@ -114,100 +94,19 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_get_revision": ["svn", "checkout"],
                 "svn_get_wc-root": ["svn", "info", "--show-item", "wc-root"]}
 
-
-
-########################
-###  INIT/PRE-CHECK  ###
-########################
-
-# Confirm OS type
-#  https://stackoverflow.com/questions/1854/python-what-os-am-i-running-on/58071295#58071295
-myLogger.info(f'Got operating system: {platform.system()}')
-if platform.system() == "Darwin": # | "Linux" | "Windows"
-    prefs["str_prefSVNExecutable"] = "/usr/local/bin/svn"
-    prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
-    #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/" 
-elif platform.system() == "Linux":
-    prefs["str_prefSVNExecutable"] = "/usr/local/bin/svn"
-    prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
-    #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/"
-# elif platform.system() == "Windows":
-#     prefs["str_prefSVNRepoHome"] = "file:///C:/SVNRepository/"
-else:
-    myLogger.critical(f'Aborting init due to unsupported operating system type {platform.system()}')
-    raise SystemError('This add-on has not been implemented for your OS.')
-    #TODO: This is probably not the graceful way to quit.
-
-
-## Check python version
-#    v3.5+ Required for subprocess
-if sys.version_info < (3, 5):
-    myLogger.critical("Python version is below the required 3.5")
-    raise SystemError("Python version is below the required 3.5")
-myLogger.info("Using Python version " + '.'.join(map(str, sys.version_info)))
-
-
-# Record Blender version
-myLogger.info(f'Got blender version {bpy.app.version}.')
-
-
-## Check that svn is installed
-#   TODO: Confirm minimum version
-try:
-    process = subprocess.Popen(svn_commands["svn_version_quiet"],
-                            stdout=subprocess.PIPE, 
-                            stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-
-    svn_version = stdout.decode('utf-8')
-    myLogger.info("\'svn\' command found successfully. Using version" + svn_version )
-    
-except FileNotFoundError as error:
-    myLogger.critical(error)
-    myLogger.critical("\'svn\' command could not be found")
-    raise SystemError("\'svn\' command could not be found. Please ensure that subversion is installed and available on your environment's PATH variable.")
-
-
-## Check svn capabilities
-try:
-    process = subprocess.Popen(svn_commands["svn_version"],
-                            stdout=subprocess.PIPE, 
-                            stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-
-    stdout = stdout.decode('utf-8')
-    
-    svn_ra_svn   = len(re.findall("ra_svn", stdout))>0
-    svn_ra_local = len(re.findall("ra_local", stdout))>0
-    
-    myLogger.info("Subversion RA modules confirmed. ra_svn: {0} ra_local: {1}".format(svn_ra_svn, svn_ra_local))
-    
-except FileNotFoundError as error:
-    myLogger.critical(error)
-    myLogger.critical("\'svn\' command could not be found.")
-
-
-## Check that svnadmin is installed
-try:
-    process = subprocess.Popen(svn_commands["svn_admin_version"],
-                            stdout=subprocess.PIPE, 
-                            stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-    
-    svnadmin_version = stdout.decode('utf-8')
-    svnadmin_avail = True 
-    
-    myLogger.info("\'svnadmin\' command found successfully. Using version" + svnadmin_version)
-    
-except FileNotFoundError as error:
-    myLogger.error(error)
-    myLogger.error("\'svnadmin\' command could not be found.")
-
-
-
 ########################
 ### Utility Funcs    ###
 ########################
+
+## Return full svn command line for the environment
+def generateSvnCommandLine(svn_command):
+    result = svn_commands[svn_command]
+    result[0] = os.path.join(prefs["str_prefSVNExecutableDir"],result[0])
+
+    myLogger.debug("Generated command: \'" + ' '.join(result) + "\'")
+
+    return result
+
 
 ## Get the SVN status of the repo or file at filepath
 # From svn help status
@@ -226,7 +125,7 @@ except FileNotFoundError as error:
 #     '!' item is missing (removed by non-svn comman    d) or incomplete
 #     '~' versioned item obstructed by some item of a different kind
 def getSvnStatus(wc_root):
-    process = subprocess.Popen(svn_commands["svn_status_all"] + [wc_root],
+    process = subprocess.Popen(generateSvnCommandLine("svn_status_all") + [wc_root],
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
@@ -248,7 +147,7 @@ def getSvnStatus(wc_root):
 
 
 def getSvnFileStatus(filepath):
-    process = subprocess.Popen(svn_commands["svn_status"] + [filepath],
+    process = subprocess.Popen(generateSvnCommandLine("svn_status") + [filepath],
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
@@ -272,7 +171,7 @@ def getSvnFileStatus(filepath):
 
 ## Get the revision number of the given node (file or directory)
 def getSvnRevision(filepath):
-    process = subprocess.Popen(svn_commands["svn_revision"] + [filepath],
+    process = subprocess.Popen(generateSvnCommandLine("svn_revision") + [filepath],
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
@@ -312,7 +211,7 @@ def generateRepoName(filepath):
 
 ## Get the Root dir of the Working Copy
 def getSVNWCRoot(filepath):
-    process = subprocess.Popen(svn_commands["svn_info"] + [filepath],
+    process = subprocess.Popen(generateSvnCommandLine("svn_info") + [filepath],
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
@@ -365,6 +264,117 @@ def getCommitListWithParents(filepath, wc_root, svn_status):
     return result
 
 
+######################
+###  INIT/LOGGING  ###
+######################
+
+logFile = logging.FileHandler(filename=str(Path(__file__).parent/'svnconnector.log'),
+                                mode='w',
+                                encoding='utf-8')
+logFile.setFormatter(logging.Formatter('%(name)s: %(levelname)s %(message)s'))
+logging.basicConfig(level=logging.DEBUG, handlers=[logFile])
+
+myLogger = logging.getLogger('com.codetestdummy.blender.svnconnector')
+
+# console = logging.StreamHandler(stream=sys.stdout)
+# console.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s [%(thread)d]:  %(message)s'))
+# myLogger.addHandler(console)
+
+myLogger.info(f'Started session at {datetime.utcnow()}.')
+
+
+
+########################
+###  INIT/PRE-CHECK  ###
+########################
+
+# Confirm OS type
+#  https://stackoverflow.com/questions/1854/python-what-os-am-i-running-on/58071295#58071295
+myLogger.info(f'Got operating system: {platform.system()}')
+if platform.system() == "Darwin": # | "Linux" | "Windows"
+    prefs["str_prefSVNExecutableDir"] = "/usr/local/bin/"
+    prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
+    #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/" 
+elif platform.system() == "Linux":
+    prefs["str_prefSVNExecutableDir"] = "/usr/local/bin/"
+    prefs["str_prefSVNRepoHome"] = "~/.svnrepos/"
+    #prefs["str_prefSVNRepoHome"] = "file://$HOME/.svnrepos/"
+# elif platform.system() == "Windows":
+#     prefs["str_prefSVNRepoHome"] = "file:///C:/SVNRepository/"
+else:
+    myLogger.critical(f'Aborting init due to unsupported operating system type {platform.system()}')
+    raise SystemError('This add-on has not been implemented for your OS.')
+    #TODO: This is probably not the graceful way to quit.
+
+
+## Check python version
+#    v3.5+ Required for subprocess
+if sys.version_info < (3, 5):
+    myLogger.critical("Python version is below the required 3.5")
+    raise SystemError("Python version is below the required 3.5")
+myLogger.info("Using Python version " + '.'.join(map(str, sys.version_info)))
+
+
+# Record Blender version
+myLogger.info(f'Got blender version {bpy.app.version}.')
+
+
+## Check that svn is installed
+#   TODO: Confirm minimum version
+try:
+    process = subprocess.Popen(generateSvnCommandLine("svn_version_quiet"),
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+
+    if len(stderr)>0:
+        myLogger.error("Error locating \'svn\' command: " + stderr.decode('utf-8'))
+    else:
+        svn_version = stdout.decode('utf-8')
+        myLogger.info("\'svn\' command found successfully. Using version" + svn_version )
+    
+except FileNotFoundError as error:
+    myLogger.critical(error)
+    myLogger.critical("\'svn\' command could not be found")
+    raise SystemError("\'svn\' command could not be found. Please ensure that subversion is installed and available on your environment's PATH variable.")
+
+
+## Check svn capabilities
+try:
+    process = subprocess.Popen(generateSvnCommandLine("svn_version"),
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+
+    stdout = stdout.decode('utf-8')
+    
+    svn_ra_svn   = len(re.findall("ra_svn", stdout))>0
+    svn_ra_local = len(re.findall("ra_local", stdout))>0
+    
+    myLogger.info("Subversion RA modules confirmed. ra_svn: {0} ra_local: {1}".format(svn_ra_svn, svn_ra_local))
+    
+except FileNotFoundError as error:
+    myLogger.critical(error)
+    myLogger.critical("\'svn\' command could not be found.")
+
+
+## Check that svnadmin is installed
+try:
+    process = subprocess.Popen(generateSvnCommandLine("svn_admin_version"),
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+    
+    svnadmin_version = stdout.decode('utf-8')
+    svnadmin_avail = True 
+    
+    myLogger.info("\'svnadmin\' command found successfully. Using version" + svnadmin_version)
+    
+except FileNotFoundError as error:
+    myLogger.error(error)
+    myLogger.error("\'svnadmin\' command could not be found.")
+
+
 
 ########################
 ### Operators        ###
@@ -406,7 +416,7 @@ class CreateAndImportOperator(bpy.types.Operator):
         
         # Check we are not already in a working set
         # Confirm whether there is a working set available.
-        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
+        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
@@ -471,7 +481,7 @@ class CreateAndImportOperator(bpy.types.Operator):
             # Create a new repository withing the repoRoot
             myLogger.info(f'Attempting to create repository via SVNadmin.')
             try:
-                process = subprocess.Popen(svn_commands['svn_admin_create'] + [repoPath.as_posix()],
+                process = subprocess.Popen(generateSvnCommandLine('svn_admin_create') + [repoPath.as_posix()],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -487,7 +497,7 @@ class CreateAndImportOperator(bpy.types.Operator):
 
                 # Create a recommended project layout in the new repository:
                 myLogger.info('Creating repository structure with svn...')
-                process = subprocess.Popen(svn_commands['svn_mkdir_repo'] + [Path(repoPath,"trunk").as_uri()] + [Path(repoPath,"branches").as_uri()] + [Path(repoPath,"tags").as_uri()],
+                process = subprocess.Popen(generateSvnCommandLine('svn_mkdir_repo') + [Path(repoPath,"trunk").as_uri()] + [Path(repoPath,"branches").as_uri()] + [Path(repoPath,"tags").as_uri()],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -503,7 +513,7 @@ class CreateAndImportOperator(bpy.types.Operator):
 
                 # Convert the current directory into a working copy of the trunk/ in the repository:
                 #  svn checkout file://$HOME/.svnrepos/MyRepo/trunk ./
-                process = subprocess.Popen(svn_commands['svn_checkout'] + [Path(repoPath,"trunk").as_uri()] + [working_dir.as_posix()],
+                process = subprocess.Popen(generateSvnCommandLine('svn_checkout') + [Path(repoPath,"trunk").as_uri()] + [working_dir.as_posix()],
                     stdout=subprocess.PIPE, 
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -519,7 +529,7 @@ class CreateAndImportOperator(bpy.types.Operator):
 
                 # Schedule your project's files to be added to the repository:
                 #  svn add --force ./
-                process = subprocess.Popen(svn_commands['svn_add_single'] + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine('svn_add_single') + [filepath],
                     stdout=subprocess.PIPE, 
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -535,7 +545,7 @@ class CreateAndImportOperator(bpy.types.Operator):
 
                 # Commit the project's files:
                 #  svn commit -m "Initial import."
-                process = subprocess.Popen(svn_commands['svn_commit_single'] + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine('svn_commit_single') + [filepath],
                     stdout=subprocess.PIPE, 
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -550,7 +560,7 @@ class CreateAndImportOperator(bpy.types.Operator):
                 
                 # Update your working copy:
                 #  svn update
-                process = subprocess.Popen(svn_commands['svn_update'] + [working_dir.as_posix()],
+                process = subprocess.Popen(generateSvnCommandLine('svn_update') + [working_dir.as_posix()],
                     stdout=subprocess.PIPE, 
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -612,7 +622,7 @@ class AddOperator(bpy.types.Operator):
         working_dir = Path(filepath).parent
 
         # Confirm that there is a working set available.
-        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
+        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
@@ -638,7 +648,7 @@ class AddOperator(bpy.types.Operator):
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
             elif status in ['?']:
-                process = subprocess.Popen(svn_commands["svn_add_single"] + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_add_single") + [filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -684,7 +694,7 @@ class CommitOperator(bpy.types.Operator):
             return {'FINISHED'}
 
         # Confirm that there is a working set available.
-        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
+        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
@@ -706,57 +716,58 @@ class CommitOperator(bpy.types.Operator):
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
             elif status in ['M','A']:
-                ## Try to commit single file
-                process = subprocess.Popen(svn_commands["svn_commit_single"] + [filepath],
+                ## Try to commit single file individually
+                process = subprocess.Popen(generateSvnCommandLine("svn_commit_single") + [filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
 
-                if len(stdout)>0:
+                #handle planned error cases
+                if process.returncode!=0:
+                    ## If the file was added from a sub-folder of the working copy
+                    #  which was created after the last commit, then we need to 
+                    #  include those parent folders of that file  in the next commit.
+                    if len( re.findall("E200009", stderr.decode('utf-8')) )>0:
+                        myLogger.debug("attempting to commit with parents.")
+                        err1, wc_root = getSVNWCRoot(filepath)
+                        if not err1:
+                            err2, svn_status = getSvnStatus(wc_root)
+
+                            if not(err2):
+                                commitlist = getCommitListWithParents(filepath,wc_root,svn_status)
+
+                                process = subprocess.Popen(generateSvnCommandLine("svn_commit_all") + commitlist,
+                                            stdout=subprocess.PIPE, 
+                                            stderr=subprocess.PIPE)
+                                stdout, stderr = process.communicate()
+
+                                if len(stdout)>0:
+                                    result = stdout.decode('utf-8')
+                                    myLogger.info(result.replace('\n',' '))
+                                    myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
+                                    self.report({'INFO'},result.replace('\n',' '))
+                                else:
+                                    myLogger.error(f'Error when committing file with parents \'{stderr}\'.')
+                                    myLogger.error(f'Error when committing commitlist \'{commitlist}\'.')
+                                    self.report({'ERROR'},f'Error committing file \'{stderr}\'.')
+                            else:
+                                myLogger.error([err1])
+                                self.report({'ERROR'},[err1])
+                    else:
+                        myLogger.error(f'Error when committing file: {stderr}')
+                        self.report({'ERROR'},f'Error when committing file: {stderr}')
+                else:
                     result = stdout.decode('utf-8')
                     myLogger.info(result.replace('\n',' '))
-                    myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
+                    myLogger.info(f'Successfully committed.')
                     self.report({'INFO'},result.replace('\n',' '))
-
-                elif len( re.findall("E200009", stderr.decode('utf-8')) )>0:
-                    err1, wc_root = getSVNWCRoot(filepath)
-                    if not err1:
-                        err2, svn_status = getSvnStatus(wc_root)
-
-                        if not(err2):
-                            commitlist = getCommitListWithParents(filepath,wc_root,svn_status)
-
-                            process = subprocess.Popen(svn_commands["svn_commit_all"] + commitlist,
-                                        stdout=subprocess.PIPE, 
-                                        stderr=subprocess.PIPE)
-                            stdout, stderr = process.communicate()
-
-                            if len(stdout)>0:
-                                result = stdout.decode('utf-8')
-                                myLogger.info(result.replace('\n',' '))
-                                myLogger.debug(f'Successfully committed. Return code: \'{process.returncode}\'.')
-                                self.report({'INFO'},result.replace('\n',' '))
-                            else:
-                                myLogger.error(f'Error when committing file with parents \'{stderr}\'.')
-                                myLogger.error(f'Error when committing commitlist \'{commitlist}\'.')
-                                self.report({'ERROR'},f'Error committing file \'{stderr}\'.')
-                        else:
-                            myLogger.error([err1])
-                            self.report({'ERROR'},[err1])
-
-                    else:
-                        myLogger.error([err1])
-                        self.report({'ERROR'},[err1])
-                else:
-                    myLogger.error(f'Error when committing file: {process.returncode}')
-                    self.report({'ERROR'},f'Error when committing file: {process.returncode}')
             else:
                 myLogger.error(f'File has unsupported status \'{status}\'.')
                 self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
         else:           
-
-            myLogger.error(result)
-            self.report({'ERROR'},result)
+            myLogger.error('Aborting: File has error staus.')
+            myLogger.error(err)
+            self.report({'ERROR'},err)
 
         return {'FINISHED'}
 
@@ -777,7 +788,7 @@ class RevertPreviousOperator(bpy.types.Operator):
 
 
         # Confirm that there is a working set available.
-        process = subprocess.Popen(svn_commands["svn_info"] + [working_dir],
+        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
                      stdout=subprocess.PIPE, 
                      stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
@@ -801,7 +812,7 @@ class RevertPreviousOperator(bpy.types.Operator):
         err, status = getSvnFileStatus(filepath)
         if not err:
             if status == 'M':
-                process = subprocess.Popen(svn_commands["svn_revert_previous"] + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_revert_previous") + [filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -828,7 +839,7 @@ class RevertPreviousOperator(bpy.types.Operator):
 
                     myLogger.info(f'Attempting to refert file to revision {revnum}.')
                     #execute update command
-                    process = subprocess.Popen(svn_commands["svn_update_previous"] + [str(revnum)] + [filepath],
+                    process = subprocess.Popen(generateSvnCommandLine("svn_update_previous") + [str(revnum)] + [filepath],
                                 stdout=subprocess.PIPE, 
                                 stderr=subprocess.PIPE)
                     stdout, stderr = process.communicate()
@@ -870,7 +881,7 @@ class SVNConnectorAddonPreferences(AddonPreferences):
     svnExecutable: StringProperty(
         name="\'svn\' executable",
         subtype='FILE_PATH',
-        default=prefs["str_prefSVNExecutable"]
+        default=prefs["str_prefSVNExecutableDir"]
     )
 
     useDefaultRepoRoot: BoolProperty(
@@ -998,7 +1009,7 @@ class SvnStatusPanel(bpy.types.Panel):
 ###############################
 
 bl_info = {
- "name": "Shabby's SVN Connector",
+ "name": "SVN Connector",
  "description": "Provides basic interface with a Subversion repository.",
  "author": "Tester",
  "blender": (2, 80, 0),

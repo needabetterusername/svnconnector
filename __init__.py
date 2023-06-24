@@ -793,7 +793,7 @@ class CommitOperator(bpy.types.Operator):
 #  I.e. undo changes for THIS file.
 class RevertPreviousOperator(bpy.types.Operator):
     bl_idname = "scop.revert_previous"
-    bl_label  = "Revert to Previous Commit"
+    bl_label  = "< Go Back One (Revert)"
 
 
     @classmethod
@@ -946,11 +946,22 @@ class SvnSubMenu(bpy.types.Menu):
     def draw(self, context):
         layout = self.layout
 
-        # Append in order of expected frequency of use
-        layout.operator("scop.commit", text="Commit your changes")
-        layout.operator("scop.revert_previous")
-        layout.operator("scop.add", text="Include this file")
+        # Append in order of required execution for good flow.
+        # Operators will be disabled according to state.
         layout.operator("scop.create_import", text="Commit to new repo")
+        layout.operator("scop.add", text="Include this file")
+        layout.operator("scop.commit", text="Commit your changes")
+        #Versions sub-menu
+        layout.menu("OBJECT_MT_SVN_submenu_sub")
+
+## SVN Connector/Versions submenu
+class SvnVersionsSubMenu(bpy.types.Menu):
+    bl_idname = "OBJECT_MT_SVN_submenu_sub"
+    bl_label = "Revisions"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("scop.revert_previous")
 
 
 # Function to draw the menu item.

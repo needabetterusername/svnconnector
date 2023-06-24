@@ -867,6 +867,10 @@ class RevertPreviousOperator(bpy.types.Operator):
             self.report(err)
 
         return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        wm = context.window_manager
+        return wm.invoke_confirm(self, event)
 
 #################################
 ### Blender GUI Class Objects ###
@@ -940,6 +944,23 @@ class SvnSubMenu(bpy.types.Menu):
 def menu_draw_svn(self, context):
     #self.layout.operator("wm.save_homefile")
     self.layout.menu("OBJECT_MT_SVN_submenu")
+
+
+# Warning and confirmation class
+class ConfirmOperator(bpy.types.Operator):
+    bl_idname = "scop.confirm_operator"
+    bl_label = "Confirmation"
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="WARNING: This will IRREVERSIBLY delete any un-committed changes.")
+
 
 
 ## INFO Panel

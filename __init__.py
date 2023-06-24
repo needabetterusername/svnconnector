@@ -627,40 +627,33 @@ class AddOperator(bpy.types.Operator):
     bl_idname = "scop.add"
     bl_label  = "Add"
 
+
+    @classmethod
+    def poll(self, context):
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        return getHasWorkingSet(self._working_dir)
+    
+
     def execute(self, context):
-        
-        filepath = bpy.data.filepath
-        filename = Path(filepath).stem
-        working_dir = Path(filepath).parent
-
-        # Confirm that there is a working set available.
-        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report({'ERROR'}, "There is no working set for this directory. You can either create a new repository or move this file to an existing working set and try again.")
-
-            return {'FINISHED'}
-        
+       
         # Confirm that that the file is saved
         if not bpy.data.is_saved:
             self.report({'ERROR'}, "File has not been saved. Please save before committing.")
             return {'FINISHED'}
 
-        myLogger.info(f'Attempting to add file \'{filepath}\'.')
+        myLogger.info(f'Attempting to add file \'{self._filepath}\'.')
 
-        # Confirm file's SVN status
-        # Acceptable for add '?' only
-        err, status = getSvnFileStatus(filepath)
-
+        err, status = getSvnFileStatus(self._filepath)
         if not err:
             if status in [' ','A','C','M']:
                 self.report({'ERROR'},"File is already added to the working set.")
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
             elif status in ['?']:
-                process = subprocess.Popen(generateSvnCommandLine("svn_add_single") + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_add_single") + [self._filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -693,13 +686,13 @@ class CommitOperator(bpy.types.Operator):
 
     @classmethod
     def poll(self, context):
-        print(context)
         self._filepath = bpy.data.filepath
         self._filename = Path(self._filepath).stem
         self._working_dir = Path(self._filepath).parent
 
         self._hasWorkingSet = getHasWorkingSet(self._working_dir)
         return self._hasWorkingSet
+
 
     def execute(self, context):
 
@@ -794,7 +787,6 @@ class RevertPreviousOperator(bpy.types.Operator):
 
     @classmethod
     def poll(self, context):
-        print(context)
         self._filepath = bpy.data.filepath
         self._filename = Path(self._filepath).stem
         self._working_dir = Path(self._filepath).parent
@@ -880,6 +872,8 @@ class RevertPreviousOperator(bpy.types.Operator):
             self.report(err)
 
         return {'FINISHED'}
+
+
 
 #################################
 ### Blender GUI Class Objects ###
@@ -1032,6 +1026,7 @@ class SvnStatusPanel(bpy.types.Panel):
 
         bpy.app.handlers.load_post.append(self.fileUpdateHandler)
         bpy.app.handlers.save_post.append(self.fileUpdateHandler)
+
 
 
 ###############################

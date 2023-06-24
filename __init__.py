@@ -693,6 +693,7 @@ class CommitOperator(bpy.types.Operator):
 
     @classmethod
     def poll(self, context):
+        print(context)
         self._filepath = bpy.data.filepath
         self._filename = Path(self._filepath).stem
         self._working_dir = Path(self._filepath).parent
@@ -710,15 +711,6 @@ class CommitOperator(bpy.types.Operator):
             return {'FINISHED'}
         if bpy.data.is_dirty:
             self.report({'ERROR'}, "This file has unsaved changes. Please save before committing.")
-            return {'FINISHED'}
-
-        # Confirm that there is a working set available.
-        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [self._working_dir],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report({'ERROR'}, "There is no working set available for this folder. Please prepare one, or move this file into an existing one.")
             return {'FINISHED'}
 
         myLogger.info(f'Attempting to commit file \'{self._filepath}\'.')
@@ -748,7 +740,7 @@ class CommitOperator(bpy.types.Operator):
                     #  include those parent folders of that file  in the next commit.
                     if len( re.findall("E200009", stderr.decode('utf-8')) )>0:
                         myLogger.debug("attempting to commit with parents.")
-                        err1, wc_root = getSVNWCRoot(self.filepath)
+                        err1, wc_root = getSVNWCRoot(self._filepath)
                         if not err1:
                             err2, svn_status = getSvnStatus(wc_root)
 
@@ -799,24 +791,26 @@ class RevertPreviousOperator(bpy.types.Operator):
     bl_idname = "scop.revert_previous"
     bl_label  = "Revert to Previous Commit"
 
+
+    @classmethod
+    def poll(self, context):
+        print(context)
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        self._hasWorkingSet = getHasWorkingSet(self._working_dir)
+        return self._hasWorkingSet
+    
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        return wm.invoke_confirm(self, event)
+    
+
     def execute(self, context):
 
-        filepath = bpy.data.filepath
-        filename = Path(filepath).stem
-        working_dir = Path(filepath).parent
-
-
-        # Confirm that there is a working set available.
-        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report("There is no working set available for this folder. No reversion possible.")
-
-            return {'FINISHED'}
-
-        myLogger.info(f'Attempting to commit file \'{filepath}\'.')
+        myLogger.info(f'Attempting to commit file \'{self._filepath}\'.')
 
         # Confirm file status
         # Acceptable for commit: ' ','M'
@@ -828,10 +822,10 @@ class RevertPreviousOperator(bpy.types.Operator):
         #              svn export --force -r PREV filename filename 
         #           or svn merge -r HEAD:123 .
         #         then svn commit -m "Reverted to revision 123"
-        err, status = getSvnFileStatus(filepath)
+        err, status = getSvnFileStatus(self._filepath)
         if not err:
             if status == 'M':
-                process = subprocess.Popen(generateSvnCommandLine("svn_revert_previous") + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_revert_previous") + [self._filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -852,13 +846,13 @@ class RevertPreviousOperator(bpy.types.Operator):
                     self.report({'ERROR'},f'Error when reverting file with status {status}: {process.returncode}')
             elif status == ' ':
                 #Get and adjust revision number
-                err, revnum = getSvnRevision(filepath)
+                err, revnum = getSvnRevision(self._filepath)
                 if revnum > 1:
                     revnum -= 1
 
                     myLogger.info(f'Attempting to refert file to revision {revnum}.')
                     #execute update command
-                    process = subprocess.Popen(generateSvnCommandLine("svn_update_previous") + [str(revnum)] + [filepath],
+                    process = subprocess.Popen(generateSvnCommandLine("svn_update_previous") + [str(revnum)] + [self._filepath],
                                 stdout=subprocess.PIPE, 
                                 stderr=subprocess.PIPE)
                     stdout, stderr = process.communicate()
@@ -886,10 +880,6 @@ class RevertPreviousOperator(bpy.types.Operator):
             self.report(err)
 
         return {'FINISHED'}
-    
-    def invoke(self, context, event):
-        wm = context.window_manager
-        return wm.invoke_confirm(self, event)
 
 #################################
 ### Blender GUI Class Objects ###

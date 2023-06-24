@@ -94,9 +94,9 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_get_revision": ["svn", "checkout"],
                 "svn_get_wc-root": ["svn", "info", "--show-item", "wc-root"]}
 
-########################
-### Utility Funcs    ###
-########################
+##########################
+### SVN Utility Funcs  ###
+##########################
 
 ## Return full svn command line for the environment
 def generateSvnCommandLine(svn_command):
@@ -106,6 +106,18 @@ def generateSvnCommandLine(svn_command):
     myLogger.debug("Generated command: \'" + ' '.join(result) + "\'")
 
     return result
+
+
+## Return whether there is a working set available for the directory
+def getHasWorkingSet(working_dir):
+    process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+    if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
+        return False
+    else:
+        return True
 
 
 ## Get the SVN status of the repo or file at filepath
@@ -400,9 +412,20 @@ class CreateAndImportOperator(bpy.types.Operator):
     bl_idname = "scop.create_import"
     bl_label  = "Create Repo & Add"
 
+
+    @classmethod
+    def poll(self, context):
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        self._hasWorkingSet = getHasWorkingSet(self._working_dir)
+        return not self._hasWorkingSet
+
+
     def execute(self, context):
 
-        myLogger.info(f'Running CreateAndImportOperator()')
+        myLogger.info(f'Execute CreateAndImportOperator()')
 
         # Confirm that the current file is saved
         if not bpy.data.is_saved:
@@ -615,40 +638,33 @@ class AddOperator(bpy.types.Operator):
     bl_idname = "scop.add"
     bl_label  = "Add"
 
+
+    @classmethod
+    def poll(self, context):
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        return getHasWorkingSet(self._working_dir)
+    
+
     def execute(self, context):
-        
-        filepath = bpy.data.filepath
-        filename = Path(filepath).stem
-        working_dir = Path(filepath).parent
-
-        # Confirm that there is a working set available.
-        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report({'ERROR'}, "There is no working set for this directory. Please create a new repository or move the file to an existing working set.")
-
-            return {'FINISHED'}
-        
+       
         # Confirm that that the file is saved
         if not bpy.data.is_saved:
             self.report({'ERROR'}, "File has not been saved. Please save before committing.")
             return {'FINISHED'}
 
-        myLogger.info(f'Attempting to add file \'{filepath}\'.')
+        myLogger.info(f'Attempting to add file \'{self._filepath}\'.')
 
-        # Confirm file's SVN status
-        # Acceptable for add '?' only
-        err, status = getSvnFileStatus(filepath)
-
+        err, status = getSvnFileStatus(self._filepath)
         if not err:
             if status in [' ','A','C','M']:
                 self.report({'ERROR'},"File is already added to the working set.")
             elif status == 'I':
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
             elif status in ['?']:
-                process = subprocess.Popen(generateSvnCommandLine("svn_add_single") + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_add_single") + [self._filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -679,13 +695,21 @@ class CommitOperator(bpy.types.Operator):
     bl_idname = "scop.commit"
     bl_label  = "Commit"
 
+    @classmethod
+    def poll(self, context):
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        self._hasWorkingSet = getHasWorkingSet(self._working_dir)
+        return self._hasWorkingSet
+
+
     def execute(self, context):
 
-        filepath = bpy.data.filepath
-        filename = Path(filepath).stem
-        working_dir = Path(filepath).parent
-
         # Confirm file state
+        # Allow these errors. If we had them in poll(), it would be difficult for the
+        # user to grasp ths situation, leading to poor flow.
         if not bpy.data.is_saved:
             self.report({'ERROR'}, "This file has not been saved to your drive. Please save it before committing.")
             return {'FINISHED'}
@@ -693,20 +717,11 @@ class CommitOperator(bpy.types.Operator):
             self.report({'ERROR'}, "This file has unsaved changes. Please save before committing.")
             return {'FINISHED'}
 
-        # Confirm that there is a working set available.
-        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report({'ERROR'}, "There is no working set available for this folder. Please prepare one, or move this file into an existing one.")
-            return {'FINISHED'}
-
-        myLogger.info(f'Attempting to commit file \'{filepath}\'.')
+        myLogger.info(f'Attempting to commit file \'{self._filepath}\'.')
 
         # Confirm file status
         # Acceptable for commit: 'A','M'
-        err, status = getSvnFileStatus(filepath)
+        err, status = getSvnFileStatus(self._filepath)
 
         if not err:
             if status == ' ':
@@ -717,7 +732,7 @@ class CommitOperator(bpy.types.Operator):
                 self.report({'ERROR'},"File is currently ignored. Please remove it from the .svnignore file.")
             elif status in ['M','A']:
                 ## Try to commit single file individually
-                process = subprocess.Popen(generateSvnCommandLine("svn_commit_single") + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_commit_single") + [self._filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -729,12 +744,12 @@ class CommitOperator(bpy.types.Operator):
                     #  include those parent folders of that file  in the next commit.
                     if len( re.findall("E200009", stderr.decode('utf-8')) )>0:
                         myLogger.debug("attempting to commit with parents.")
-                        err1, wc_root = getSVNWCRoot(filepath)
+                        err1, wc_root = getSVNWCRoot(self._filepath)
                         if not err1:
                             err2, svn_status = getSvnStatus(wc_root)
 
                             if not(err2):
-                                commitlist = getCommitListWithParents(filepath,wc_root,svn_status)
+                                commitlist = getCommitListWithParents(self._filepath,wc_root,svn_status)
 
                                 process = subprocess.Popen(generateSvnCommandLine("svn_commit_all") + commitlist,
                                             stdout=subprocess.PIPE, 
@@ -778,26 +793,27 @@ class CommitOperator(bpy.types.Operator):
 #  I.e. undo changes for THIS file.
 class RevertPreviousOperator(bpy.types.Operator):
     bl_idname = "scop.revert_previous"
-    bl_label  = "Revert to Previous Commit"
+    bl_label  = "< Go Back One (Revert)"
+
+
+    @classmethod
+    def poll(self, context):
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        self._hasWorkingSet = getHasWorkingSet(self._working_dir)
+        return self._hasWorkingSet
+    
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        return wm.invoke_confirm(self, event)
+    
 
     def execute(self, context):
 
-        filepath = bpy.data.filepath
-        filename = Path(filepath).stem
-        working_dir = Path(filepath).parent
-
-
-        # Confirm that there is a working set available.
-        process = subprocess.Popen(generateSvnCommandLine("svn_info") + [working_dir],
-                     stdout=subprocess.PIPE, 
-                     stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if (len(stdout)<1) & (len(re.findall("E155007", stderr.decode('utf-8')))>0):
-            self.report("There is no working set available for this folder. No reversion possible.")
-
-            return {'FINISHED'}
-
-        myLogger.info(f'Attempting to commit file \'{filepath}\'.')
+        myLogger.info(f'Attempting to commit file \'{self._filepath}\'.')
 
         # Confirm file status
         # Acceptable for commit: ' ','M'
@@ -809,10 +825,10 @@ class RevertPreviousOperator(bpy.types.Operator):
         #              svn export --force -r PREV filename filename 
         #           or svn merge -r HEAD:123 .
         #         then svn commit -m "Reverted to revision 123"
-        err, status = getSvnFileStatus(filepath)
+        err, status = getSvnFileStatus(self._filepath)
         if not err:
             if status == 'M':
-                process = subprocess.Popen(generateSvnCommandLine("svn_revert_previous") + [filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_revert_previous") + [self._filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -833,13 +849,13 @@ class RevertPreviousOperator(bpy.types.Operator):
                     self.report({'ERROR'},f'Error when reverting file with status {status}: {process.returncode}')
             elif status == ' ':
                 #Get and adjust revision number
-                err, revnum = getSvnRevision(filepath)
+                err, revnum = getSvnRevision(self._filepath)
                 if revnum > 1:
                     revnum -= 1
 
                     myLogger.info(f'Attempting to refert file to revision {revnum}.')
                     #execute update command
-                    process = subprocess.Popen(generateSvnCommandLine("svn_update_previous") + [str(revnum)] + [filepath],
+                    process = subprocess.Popen(generateSvnCommandLine("svn_update_previous") + [str(revnum)] + [self._filepath],
                                 stdout=subprocess.PIPE, 
                                 stderr=subprocess.PIPE)
                     stdout, stderr = process.communicate()
@@ -867,10 +883,8 @@ class RevertPreviousOperator(bpy.types.Operator):
             self.report(err)
 
         return {'FINISHED'}
-    
-    def invoke(self, context, event):
-        wm = context.window_manager
-        return wm.invoke_confirm(self, event)
+
+
 
 #################################
 ### Blender GUI Class Objects ###
@@ -932,11 +946,22 @@ class SvnSubMenu(bpy.types.Menu):
     def draw(self, context):
         layout = self.layout
 
-        # Append in order of expected frequency of use
-        layout.operator("scop.commit", text="Commit your changes")
-        layout.operator("scop.revert_previous")
-        layout.operator("scop.add", text="Include this file")
+        # Append in order of required execution for good flow.
+        # Operators will be disabled according to state.
         layout.operator("scop.create_import", text="Commit to new repo")
+        layout.operator("scop.add", text="Include this file")
+        layout.operator("scop.commit", text="Commit your changes")
+        #Versions sub-menu
+        layout.menu("OBJECT_MT_SVN_submenu_sub")
+
+## SVN Connector/Versions submenu
+class SvnVersionsSubMenu(bpy.types.Menu):
+    bl_idname = "OBJECT_MT_SVN_submenu_sub"
+    bl_label = "Revisions"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("scop.revert_previous")
 
 
 # Function to draw the menu item.
@@ -1023,6 +1048,7 @@ class SvnStatusPanel(bpy.types.Panel):
 
         bpy.app.handlers.load_post.append(self.fileUpdateHandler)
         bpy.app.handlers.save_post.append(self.fileUpdateHandler)
+
 
 
 ###############################

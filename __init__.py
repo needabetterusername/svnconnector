@@ -86,8 +86,8 @@ svn_commands = {"svn_version_quiet": ["svn","--version","--quiet"],
                 "svn_commit_single": ["svn","commit","-m \'Commit from svnconnector.\'"],
                 "svn_commit_all": ["svn","commit","-m \'Commit from svnconnector.\'"],
                 "svn_add_single": ["svn","add","--parents"],
+                "svn_revert": ["svn","revert"],
                 "svn_update": ["svn", "update"],
-                "svn_revert_previous": ["svn","revert"],
                 "svn_update_previous": ["svn","update","-r"],
                 "svn_mkdir_repo": ["svn", "mkdir", "-m \'Create directory structure.\'"],
                 "svn_checkout": ["svn", "checkout"],
@@ -813,7 +813,7 @@ class RevertPreviousOperator(bpy.types.Operator):
 
     def execute(self, context):
 
-        myLogger.info(f'Attempting to commit file \'{self._filepath}\'.')
+        myLogger.info(f'Attempting to revert file \'{self._filepath}\'.')
 
         # Confirm file status
         # Acceptable for commit: ' ','M'
@@ -828,7 +828,7 @@ class RevertPreviousOperator(bpy.types.Operator):
         err, status = getSvnFileStatus(self._filepath)
         if not err:
             if status == 'M':
-                process = subprocess.Popen(generateSvnCommandLine("svn_revert_previous") + [self._filepath],
+                process = subprocess.Popen(generateSvnCommandLine("svn_revert") + [self._filepath],
                             stdout=subprocess.PIPE, 
                             stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
@@ -850,10 +850,10 @@ class RevertPreviousOperator(bpy.types.Operator):
             elif status == ' ':
                 #Get and adjust revision number
                 err, revnum = getSvnRevision(self._filepath)
-                if revnum > 1:
+                if revnum > 2:
                     revnum -= 1
 
-                    myLogger.info(f'Attempting to refert file to revision {revnum}.')
+                    myLogger.info(f'Attempting to update file to revision {revnum}.')
                     #execute update command
                     process = subprocess.Popen(generateSvnCommandLine("svn_update_previous") + [str(revnum)] + [self._filepath],
                                 stdout=subprocess.PIPE, 
@@ -884,6 +884,98 @@ class RevertPreviousOperator(bpy.types.Operator):
 
         return {'FINISHED'}
 
+
+## Update (Uplift) Operator
+## Update (uplift) the file to the latest version in the repo.
+#  I.e. return to most rececnt commit after browsing a previous one.
+#   Step 1) svn revert myfile.txt >> discard local changes and revert the file to its pristine (repository) version.
+#   Step 2) svn update myfile.txt >> update the working copy of the file to the latest version from the repository.
+class UpdateLatestOperator(bpy.types.Operator):
+    bl_idname = "scop.update_latest"
+    bl_label  = "Return to Latest >>"
+
+
+    @classmethod
+    def poll(self, context):
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        self._hasWorkingSet = getHasWorkingSet(self._working_dir)
+        return self._hasWorkingSet
+    
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        return wm.invoke_confirm(self, event)
+    
+
+    def execute(self, context):
+
+        myLogger.info(f'Attempting to revert file \'{self._filepath}\'.')
+
+        # Confirm file status
+        # Acceptable for commit: ' ','M'
+        #  if 'M' -> Uncomitted changes, so:
+        #            svn revert filename
+        #  if ' ' -> Changes were previously comitted, so:
+        #            svn update -r N filename
+        #           old:
+        #              svn export --force -r PREV filename filename 
+        #           or svn merge -r HEAD:123 .
+        #         then svn commit -m "Reverted to revision 123"
+        err, status = getSvnFileStatus(self._filepath)
+        if not err:
+            if status == 'M':
+                process = subprocess.Popen(generateSvnCommandLine("svn_revert") + [self._filepath],
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+                stdout, stderr = process.communicate()
+                if len(stdout)>0:
+                    result = stdout.decode('utf-8')
+                    myLogger.info(result.replace('\n',' '))
+                    myLogger.debug(f'Successfully reverted. Return code: \'{process.returncode}\'.')
+                    self.report({'INFO'},result.replace('\n',' '))
+
+                    bpy.ops.wm.revert_mainfile()
+
+                elif len(stderr)>0:
+                    result = stderr.decode('utf-8')
+                    myLogger.error(result)
+                    self.report({'ERROR'},result)
+                else:
+                    myLogger.error(f'Error when reverting file with status {status}: {process.returncode}')
+                    self.report({'ERROR'},f'Error when reverting file with status {status}: {process.returncode}')
+            elif status == ' ':
+                #Get and adjust revision number
+
+                myLogger.info(f'Attempting to update file to latest revision.')
+                #execute update command
+                process = subprocess.Popen(generateSvnCommandLine("svn_update") + [self._filepath],
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE)
+                stdout, stderr = process.communicate()
+                if len(stdout)>0:
+                    result = stdout.decode('utf-8')
+                    myLogger.info(result.replace('\n',' '))
+                    myLogger.debug(f'Successfully reverted. Return code: \'{process.returncode}\'.')
+                    self.report({'INFO'},result.replace('\n',' '))
+
+                    bpy.ops.wm.revert_mainfile()
+                    
+                elif len(stderr)>0:
+                    result = stderr.decode('utf-8')
+                    myLogger.error(result)
+                    self.report({'ERROR'},result)
+
+            else:
+                myLogger.error(f'File has unsupported status \'{status}\'.')
+                self.report({'ERROR'},f'File has unsupported status \'{status}\'.')
+        else:
+            myLogger.error(err)
+            self.report(err)
+
+        return {'FINISHED'}
 
 
 #################################
@@ -954,6 +1046,7 @@ class SvnSubMenu(bpy.types.Menu):
         #Versions sub-menu
         layout.menu("OBJECT_MT_SVN_submenu_sub")
 
+
 ## SVN Connector/Versions submenu
 class SvnVersionsSubMenu(bpy.types.Menu):
     bl_idname = "OBJECT_MT_SVN_submenu_sub"
@@ -961,6 +1054,7 @@ class SvnVersionsSubMenu(bpy.types.Menu):
 
     def draw(self, context):
         layout = self.layout
+        layout.operator("scop.update_latest")
         layout.operator("scop.revert_previous")
 
 

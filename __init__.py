@@ -412,6 +412,17 @@ class CreateAndImportOperator(bpy.types.Operator):
     bl_idname = "scop.create_import"
     bl_label  = "Create Repo & Add"
 
+
+    @classmethod
+    def poll(self, context):
+        self._filepath = bpy.data.filepath
+        self._filename = Path(self._filepath).stem
+        self._working_dir = Path(self._filepath).parent
+
+        self._hasWorkingSet = getHasWorkingSet(self._working_dir)
+        return not self._hasWorkingSet
+
+
     def execute(self, context):
 
         myLogger.info(f'Execute CreateAndImportOperator()')
